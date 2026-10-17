@@ -1,40 +1,108 @@
-# bitweave/python: PIO programs in Python and Amaranth (three optional packages)
+# pioweave
 
-The `bitweave` binary, its MCP server and its PIO flow and simulator are Rust and keep the name Bitweave. This directory holds only the Raspberry Pi RP work in Python,
-as three pip packages (owner decision 2026-10-17: named pioweave; the boards package was added the same day). bitweave runs them as *generator* commands (a command that prints `EMIT {"path": "x.pio"}`).
-Nothing here has run on a chip.
+Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 in Python or in Amaranth, check them in simulation, and get a ready project.
 
-| Package | Import | Needs | What |
-|---|---|---|---|
-| `builder/` pioweave-builder | `pioweave_builder` | nothing | Python builder for PIO programs for the RP2040, RP2350, RP2354 and A / B variants: one method per instruction, its own encoder, pioasm text. Note: `docs/pio-dsl.md` |
-| `boards/` pioweave-boards | `pioweave_boards` | pioweave | Board definitions, one module per board like amaranth-boards: Raspberry Pi Pico (RP2040, the owner's RP2040 target), Pico 2, Waveshare Core2350B, with named `led`, `uart_*`, `i2c_*` and `spi_*` pins from the Pico SDK headers and the SDK board name for the firmware flow |
-| `rp/` pioweave | `pioweave` | amaranth 0.5.x and the 0.6 development version, the builder | Amaranth platforms (`RP2040PioPlatform` ... `RP2354BPioPlatform`), FSM-to-PIO compiler, project writers (`pio`, `pico-c`, `micropython`), reference simulation. Note: `docs/amaranth-pio.md`. `_compat.py` is the only file that touches Amaranth's private IR and checks the version |
+PIO (programmable I/O) is a small state machine inside these chips, with its own instruction set of nine instructions, a 32-word program memory, two FIFOs and two shift registers. It is
+normally programmed in `pioasm` assembly. pioweave offers two other ways to write the same programs:
 
-Command lines: `python -m pioweave_builder emit square build/`, `python -m pioweave build square_wave build/ --project pico-c`, `python -m pioweave list`.
+- **In Python**, with one method per instruction (`pioweave.builder`). Errors are raised when you build the program, not when the chip misbehaves.
+- **In Amaranth**, as an ordinary finite state machine (`pioweave`). One FSM state is one PIO instruction, so the Amaranth simulation of your design *is* the reference for the program that is
+  generated. The compiler refuses anything that would change the cycle behaviour; it never approximates.
 
-## Install and test
+From either, pioweave writes a `.pio` file, and on request a Pico SDK C project or a MicroPython project, together with a test case for [bitweave](https://github.com/youprint/bitweave) that checks the
+compiled program against the simulation of your design.
 
-    bitweave install pioweave --yes                          # into .bitweave-tools of a project (amaranth + both packages, from this directory; not on PyPI)
-    # or by hand, into bitweave's own tools environment:
-    .tools/bin/pip install -e python/builder -e python/pioweave -e python/boards pytest
-    .tools/bin/python -m pytest python/builder/tests python/pioweave/tests python/boards/tests     # about 5 minutes; PIO_COSIM_N=150 draws more random designs
+```python
+from amaranth.hdl import Module
+from pioweave import PioDesign, RP2040PioPlatform, SimOptions
 
-The rp tests need the built `bitweave` (`target/release/bitweave`) and `pioasm` (`.tools/bin/pioasm`, see `bitweave guide pio-and-raspberry-pi`); tests that need them are skipped, not
-passed, when missing (`BITWEAVE`, `PIOASM`). Generated Pico SDK projects are built only with `PIO_BUILD_FIRMWARE=1` and the SDK and `arm-none-eabi-gcc` under `.tools`.
-`BITWEAVE_PYTHON` names this directory for `bitweave install pioweave` when the binary is not inside the repository.
+class UartTx(PioDesign):                       # 8N1 transmitter, two clock cycles per bit
+    def elaborate(self, platform):
+        m = Module()
+        tx = platform.buffer(m, "o", "gpio", 0)
+        sh = platform.shifter(m, out_shift="right")
+        x = platform.scratch("x")
+        with m.FSM():
+            with m.State("PULL"):
+                m.d.sync += tx.o.eq(1)         # idle level
+                with sh.pull(m):               # pull block: stays while the TX FIFO is empty
+                    m.next = "PULL_HOLD"
+            with m.State("PULL_HOLD"):         # no effect: becomes the delay of the pull
+                m.next = "START"
+            with m.State("START"):
+                m.d.sync += [tx.o.eq(0), x.eq(7)]
+                m.next = "BIT"
+            with m.State("BIT"):
+                sh.out(m, tx)                  # out pins, 1
+                m.next = "LOOP"
+            with m.State("LOOP"):
+                m.d.sync += x.eq(x - 1)
+                with m.If(x != 0):
+                    m.next = "BIT"
+                with m.Else():
+                    m.next = "PULL"
+        return m
 
-`python/scripts/matrix.sh 0.5.1 0.5.10 git:COMMIT` runs the tests against given Amaranth versions in fresh environments (`MATRIX_QUICK=1`: only the quick tests; `PIO_BUILD_FIRMWARE=1`: also the Pico SDK builds).
-There is no 0.6 beta release (PyPI has no pre-release and the newest tag is v0.6.0.dev0), so 0.6 is tested as the development version at a pinned commit (`_compat.TESTED_DEV`). Results of 2026-10-17:
-the whole suite (166 tests, with the Pico SDK builds) passes on Amaranth 0.5.1, 0.5.10 and 0.6.0.dev140 (commit 90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7); the quick suite (72 tests plus the instruction
-words of all ten examples) passes on 0.5.0, 0.5.2 to 0.5.9 as well; versions outside that (0.4.x, 0.5.11, other 0.6 development versions) are refused by pip (package metadata) and by the version gate.
+factory = lambda: (UartTx(), RP2040PioPlatform(sm_clock_hz=16_000_000))
+design, platform = factory()
+platform.build(design, "uart_tx", "build/uart_tx", project="pico-c", sim=SimOptions(factory=factory, cycles=60, tx=[0x55, 0xC3]))
+```
 
-## Verification (2026-10-17)
+This compiles to
 
-- the builder's encoder equals the real `pioasm` on 10,681 instruction words in 351 programs;
-- Amaranth designs: ten examples, directed forms and 450 random FSM designs (RP2040, RP2350, RP2350A/B, RP2354B, GPIO base 0 and 16) agree with the bitweave PIO simulator pin by
-  pin and cycle by cycle; designs outside the subset are refused with a reason (25 refusal tests);
-- the data path (FIFOs, OSR, ISR: `pull`, `push`, `out`, `in`; UART transmitter and receiver, byte swap, non-blocking echo): 250 random designs agree with the simulator on pins, words pushed with
-  their cycles and FIFO contents; not built yet: autopull/autopush, `mov` with OSR/ISR, `irq`, joined FIFOs (see `docs/amaranth-pio.md` section 2a);
-- the generated bitweave cases pass; three generated Pico SDK C projects (RP2040, RP2350, RP2350B with GPIO base 16) build to a UF2 with the real SDK.
+```
+.program uart_tx
+.side_set 1 opt
+    pull block side 1 [1]
+    set x, 7 side 0
+s_BIT:
+    out pins, 1
+    jmp x-- s_BIT
+```
 
-Not verified: any run on a chip; the MicroPython output (rp2 API names from the documentation); Amaranth versions other than those listed above (the 0.6 development version is a moving target: a later commit may break the compiler); PyPI publication (not planned, licence is proprietary).
+## Status
+
+Early (version 0.1.0). Everything below was checked in simulation and against the real `pioasm`; **nothing has run on a chip yet**, and the generated MicroPython code has not run on a device.
+
+- The builder's own encoder agrees with `pioasm` on 10,681 instruction words in 351 programs.
+- 450 random Amaranth designs without and 250 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all ten example designs.
+- The whole test suite (166 tests, with real Pico SDK builds of generated C projects) passes on Amaranth 0.5.1, 0.5.10 and the 0.6 development version 0.6.0.dev140; a quick suite passes on every 0.5.x.
+- Not built yet in the Amaranth front end: autopull and autopush, `mov` with the OSR or ISR, `irq`, joined FIFOs and several state machines (the Python builder has all instructions).
+
+## Install
+
+pioweave is a normal Python package for an environment that has Amaranth:
+
+    pip install pioweave                                          # once it is published
+    pip install git+https://github.com/youprint/pioweave.git     # now, from the repository (private: needs access)
+    pip install -e .                                              # from a checkout, for development
+
+`pip` pulls in `amaranth>=0.5,<0.6`. Then `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list` shows the example designs.
+With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.md](docs/getting-started.md)).
+
+The package has three parts, as `amaranth` has `hdl`, `lib` and `vendor`: `pioweave` (platforms, compiler, project writers), `pioweave.builder` (the Python builder, needs no Amaranth) and
+`pioweave.boards` (board definitions).
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/getting-started.md](docs/getting-started.md) | install, first design, build, check it with bitweave |
+| [docs/designing-for-pio.md](docs/designing-for-pio.md) | the Amaranth style that compiles to PIO: what maps to which instruction, delays, side-set, pins, what is refused |
+| [docs/data-path.md](docs/data-path.md) | FIFOs, OSR and ISR: `pull`, `push`, `out`, `in` |
+| [docs/builder.md](docs/builder.md) | the Python builder (`pioweave.builder`) |
+| [docs/boards.md](docs/boards.md) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
+| [docs/projects.md](docs/projects.md) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
+| [docs/compatibility.md](docs/compatibility.md) | supported Amaranth versions, the version gate, the test matrix |
+| [docs/testing.md](docs/testing.md) | running the tests, co-simulation, environment variables |
+| [docs/design-notes/](docs/design-notes/) | the design notes the code was written from |
+
+## Relation to bitweave
+
+[bitweave](https://github.com/youprint/bitweave) is a separate Rust program (a flow runner and MCP server). It assembles, analyses and simulates PIO programs (`bitweave pio NAME`), builds Pico SDK
+firmware, loads boards and drives logic analysers. pioweave is a Python library that writes the programs and projects; the two meet only through files: bitweave runs `python -m pioweave build ...`
+as a generator, and pioweave's tests use the bitweave binary as the reference simulator.
+
+## Licence
+
+Proprietary, see [LICENSE](LICENSE) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.

@@ -1,13 +1,19 @@
 #!/bin/sh
-# Run the Python tests of bitweave/python against given Amaranth versions, each in a fresh virtual environment.
-# Usage: python/scripts/matrix.sh 0.5.1 0.5.10 [...] [git:COMMIT]    (needs network; bitweave and pioasm are used when found, see python/README.md)
-# `git:COMMIT` installs Amaranth from github.com/amaranth-lang/amaranth at that commit (the 0.6 development version in _compat.TESTED_DEV is commit 90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7).
-# MATRIX_QUICK=1 runs the quick tests only. PIO_BUILD_FIRMWARE=1 also builds Pico SDK projects (needs the SDK and arm-none-eabi-gcc under .tools).
-# Supported versions: see _compat.py (TESTED, TESTED_DEV). (the compiler reads Amaranth's private IR). pip refuses other versions through the package metadata, and pioweave/_compat.py refuses them at import.
+# Run the pioweave tests against given Amaranth versions, each in a fresh virtual environment.
+# Usage: scripts/matrix.sh 0.5.1 0.5.10 [...] [git:COMMIT]      (needs network; see docs/compatibility.md)
+#   `git:COMMIT` installs Amaranth from github.com/amaranth-lang/amaranth at that commit (the 0.6 development version in pioweave/_compat.py,
+#   TESTED_DEV, is commit 90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7).
+#   MATRIX_QUICK=1       only the quick tests (refusals, builder, boards, the instruction words of every example): about a second per version
+#   PIO_BUILD_FIRMWARE=1 also builds the generated Pico SDK projects (needs the SDK and arm-none-eabi-gcc, see docs/testing.md)
+# The tests that compare with the bitweave PIO simulator need the bitweave binary and pioasm: BITWEAVE and PIOASM, or a bitweave checkout beside this
+# repository (../bitweave with target/release/bitweave and .tools/bin/pioasm). Without them those tests are skipped, not passed.
+# pip refuses a version outside the range in pyproject.toml, and pioweave/_compat.py refuses a version it was not tested with.
 set -u
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 ROOT=$PWD
-[ -z "${PIOASM:-}" ] && [ -x "$ROOT/.tools/bin/pioasm" ] && export PIOASM="$ROOT/.tools/bin/pioasm"      # the MicroPython project test needs it
+SIBLING="$ROOT/../bitweave"
+[ -z "${PIOASM:-}" ] && [ -x "$SIBLING/.tools/bin/pioasm" ] && export PIOASM="$SIBLING/.tools/bin/pioasm"
+[ -z "${BITWEAVE:-}" ] && [ -x "$SIBLING/target/release/bitweave" ] && export BITWEAVE="$SIBLING/target/release/bitweave"
 for v in "$@"; do
   d=$(mktemp -d)
   echo "== amaranth $v"
@@ -15,15 +21,14 @@ for v in "$@"; do
     git:*) "$d/venv/bin/pip" install -q pytest "git+https://github.com/amaranth-lang/amaranth.git@${v#git:}" 2>&1 | tail -2 ;;
     *) "$d/venv/bin/pip" install -q "amaranth==$v" pytest 2>&1 | tail -2 ;;
   esac
-  # --no-deps: pip itself would refuse a version outside amaranth>=0.5,<0.6; this shows what the version gate in _compat.py says
-  "$d/venv/bin/pip" install -q --no-deps -e python/builder -e python/pioweave -e python/boards 2>&1 | tail -2
+  # --no-deps: pip would refuse a version outside the declared range; this shows what the version gate says
+  "$d/venv/bin/pip" install -q --no-deps -e . 2>&1 | tail -2
   if "$d/venv/bin/python" -W error -c "import pioweave" 2>"$d/err.txt"; then
     if [ "${MATRIX_QUICK:-0}" = 1 ]; then
-      # MATRIX_QUICK=1: what does not need the co-simulation (about a second): refusals, the builder, the boards, and the instruction words of every example design
-      "$d/venv/bin/python" -m pytest -q -W error python/pioweave/tests/test_refusals.py python/builder/tests python/boards/tests -p no:cacheprovider 2>&1 | tail -2
-      "$d/venv/bin/python" -m pytest -q -W error python/pioweave/tests/test_compile.py -k same_on_every -p no:cacheprovider 2>&1 | tail -1
+      "$d/venv/bin/python" -m pytest -q -W error tests/test_refusals.py tests/test_program.py tests/test_boards.py -p no:cacheprovider 2>&1 | tail -2
+      "$d/venv/bin/python" -m pytest -q -W error tests/test_compile.py -k same_on_every -p no:cacheprovider 2>&1 | tail -1
     else
-      "$d/venv/bin/python" -m pytest -q -W error python/builder/tests python/pioweave/tests python/boards/tests -p no:cacheprovider 2>&1 | tail -3
+      "$d/venv/bin/python" -m pytest -q -W error tests -p no:cacheprovider 2>&1 | tail -3
     fi
   else
     echo "refused: $(tail -1 "$d/err.txt")"
