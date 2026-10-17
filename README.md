@@ -94,6 +94,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 | [docs/data-path.rst](docs/data-path.rst) | FIFOs, OSR and ISR: `pull`, `push`, `out`, `in` |
 | [docs/builder.rst](docs/builder.rst) | the Python builder (`pioweave.builder`) |
 | [docs/emulator.rst](docs/emulator.rst) | the PIO emulator: what is modelled, how to use it, how it was checked |
+| [docs/hardware-testing.rst](docs/hardware-testing.rst) | a plan (nothing run) to check programs and the emulator on the Pico and the two RP2350B boards with the logic analysers |
 | [docs/boards.rst](docs/boards.rst) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
 | [docs/projects.rst](docs/projects.rst) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
 | [docs/compatibility.rst](docs/compatibility.rst) | supported Amaranth versions, the version gate, the test matrix |
