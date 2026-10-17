@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""The only place that touches Amaranth's internals, and the version gate (study: docs/design-notes/amaranth-ir-study.rst).
+"""The only place that touches Amaranth's internals, and the second half of the version gate (the first half, `pioweave._gate`, runs when ``pioweave`` is imported) (study: docs/design-notes/amaranth-ir-study.rst).
 
 What the compiler needs from Amaranth, and where it comes from:
   Fragment                          `amaranth.hdl` (exported; its attributes `statements` and `subfragments` are not documented)
@@ -10,19 +10,10 @@ Versions (python/scripts/matrix.sh, 2026-10-17): the whole test suite passes on 
 no pre-release and the newest tag is v0.6.0.dev0); the quick suite (refusals, builder, boards, the instruction words of every example) passes on every 0.5.x from 0.5.0 to 0.5.10. Those
 are accepted; any other version is refused with a clear message unless PIOWEAVE_ALLOW_UNTESTED=1 is set.
 """
-import os
-
 import amaranth
 
-TESTED = "0.5.0 to 0.5.10"
-TESTED_DEV = ("0.6.0.dev140",)         # GitHub main at commit 90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7, 2026-10-17
-
-
-class UnsupportedAmaranth(ImportError):
-    """The installed Amaranth is not a version this package was tested with.
-
-    It is an `ImportError`, raised at import time by the version gate in `check_version`, unless ``PIOWEAVE_ALLOW_UNTESTED=1`` is set.
-    """
+from . import _gate
+from ._gate import TESTED, TESTED_DEV, UnsupportedAmaranth
 
 
 def check_version(version=None, allow=None):
@@ -33,7 +24,7 @@ def check_version(version=None, allow=None):
     version : str or None
         The version string; None means the installed Amaranth.
     allow : bool or None
-        Do not raise for an untested version. None reads the environment variable ``PIOWEAVE_ALLOW_UNTESTED`` (``"1"`` allows).
+        Do not raise for an untested version (an ``UntestedAmaranthWarning`` is issued instead). None reads the environment variable ``PIOWEAVE_ALLOW_UNTESTED`` (``"1"`` allows).
 
     Returns
     -------
@@ -50,25 +41,17 @@ def check_version(version=None, allow=None):
     >>> from pioweave._compat import check_version
     >>> check_version("0.5.3")
     True
-    >>> check_version("0.4.0", allow=True)
+    >>> import warnings
+    >>> with warnings.catch_warnings():
+    ...     warnings.simplefilter("ignore")
+    ...     check_version("0.4.0", allow=True)
     False
     >>> check_version("0.4.0", allow=False)  # doctest: +ELLIPSIS
     Traceback (most recent call last):
       ...
-    pioweave._compat.UnsupportedAmaranth: pioweave was tested with Amaranth 0.5.0 to 0.5.10 and ...; found 0.4.0. ...
+    pioweave._gate.UnsupportedAmaranth: pioweave was tested with Amaranth 0.5.0 to 0.5.10 and ...; found 0.4.0. ...
     """
-    v = version if version is not None else amaranth.__version__
-    allow = os.environ.get("PIOWEAVE_ALLOW_UNTESTED") == "1" if allow is None else allow
-    parts = v.split(".")
-    try:
-        ok = v in TESTED_DEV or (parts[0] == "0" and parts[1] == "5" and len(parts) == 3 and parts[2].isdigit() and int(parts[2]) <= 10)
-    except (IndexError, ValueError):
-        ok = False
-    if not ok and not allow:
-        raise UnsupportedAmaranth("pioweave was tested with Amaranth %s and %s; found %s. Its compiler reads Amaranth's internals. "
-                                  "Set PIOWEAVE_ALLOW_UNTESTED=1 to try anyway.\n  hint: install a tested version with pip install 'amaranth>=0.5,<0.6'; "
-                                  "scripts/matrix.sh shows what the tests say about other versions." % (TESTED, ", ".join(TESTED_DEV), v))
-    return ok
+    return _gate.check_version(amaranth.__version__ if version is None else version, allow)
 
 
 check_version()

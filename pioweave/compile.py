@@ -87,6 +87,15 @@ _HINTS = [
 ]
 
 
+MAX_STATES = 4096
+"""The most states of an FSM the compiler looks at (`pioweave._compat.fsm_state_names` reads the names of the first 4096 state numbers)."""
+
+
+def _show(v):
+    """An integer for a message; a huge one is described, because Python refuses to turn more than 4300 digits into text."""
+    return str(v) if -(1 << 64) < v < (1 << 64) else "a number of %d bits" % v.bit_length()
+
+
 def _fail(msg, loc=None):
     for pattern, hint in _HINTS:
         if re.search(pattern, msg):
@@ -270,10 +279,23 @@ class Compiled:
         return c
 
 
+def _undecodable_state(sig):
+    """True for what looks like the state signal of an ``m.FSM()`` (named ``..._state``, has a decoder) whose states `fsm_state_names` cannot name: the way Amaranth names
+    FSM states changed, not the design."""
+    return isinstance(sig, Signal) and sig.name.endswith("_state") and callable(getattr(sig, "decoder", None)) and not fsm_state_names(sig)
+
+
+def _internals_changed():
+    raise PioCompileError("Amaranth internals changed: the FSM state signal cannot be decoded into state names (pioweave._compat.fsm_state_names)\n"
+                          "  hint: this Amaranth version is not supported by this pioweave; install a tested one (python -m pioweave doctor, scripts/matrix.sh)")
+
+
 def _state_signal_and_cases(frag, sh=None):
     sync = list(frag.statements.get("sync", []))
     fsms = [s for s in sync if isinstance(s, ast.Switch) and isinstance(s.test, Signal) and fsm_state_names(s.test)]
     others = [s for s in sync if s not in fsms and not (sh is not None and _is_background_refill(s, sh))]
+    if not fsms and any(isinstance(s, ast.Switch) and _undecodable_state(s.test) for s in sync):
+        _internals_changed()
     if len(fsms) != 1:
         _fail("expected exactly one m.FSM() in the design, found %d" % len(fsms))
     if others:
@@ -305,6 +327,8 @@ def _check_fragment(frag):
             ok = isinstance(s, ast.Assign) and isinstance(s.rhs, ast.Operator) and s.rhs.operator == "==" and any(
                 isinstance(o, Signal) and fsm_state_names(o) for o in s.rhs.operands)
             if not ok:
+                if isinstance(s, ast.Assign) and isinstance(s.rhs, ast.Operator) and s.rhs.operator == "==" and any(_undecodable_state(o) for o in s.rhs.operands):
+                    _internals_changed()
                 _fail("combinational logic (m.d.comb) is not supported", getattr(s, "src_loc", None))
 
 
@@ -374,7 +398,7 @@ def _norm_cond(part, truth, ctx, loc):
                     return ("pin", l, bool(r.value) == eq)
                 if ctx.regname(l) is not None:
                     if r.value != 0:
-                        _fail("PIO can only compare X or Y with 0 (jmp !x / jmp x--), not with %d" % r.value, loc)
+                        _fail("PIO can only compare X or Y with 0 (jmp !x / jmp x--), not with %s" % _show(r.value), loc)
                     return ("cmp", "==" if eq else "!=", ctx.regname(l), 0)
             if isinstance(l, Signal) and isinstance(r, Signal) and ctx.regname(l) and ctx.regname(r) and ctx.regname(l) != ctx.regname(r):
                 eq = (op == "==") == truth
@@ -570,7 +594,7 @@ def _split_effects(effects, ctx, loc):
         v = _const(rhs, loc)
         if v is not None:
             if not 0 <= v <= 31:
-                _fail("%s can only be set to 0..31 by `set` (got %d)" % (name, v), loc)
+                _fail("%s can only be set to 0..31 by `set` (got %s)" % (name, _show(v)), loc)
             regs.append(("set", name, v))
             continue
         if isinstance(rhs, Signal):
@@ -636,6 +660,14 @@ def compile_design(top, platform, name="top"):
     >>> compiled.states
     [('HIGH', 0), ('HIGH_HOLD', None), ('LOW', 1), ('LOW_HOLD', None)]
     """
+    try:
+        return _compile_design(top, platform, name)
+    except RecursionError:
+        raise PioCompileError("the design is nested too deeply for the compiler (a very long Elif chain or deeply nested m.If)\n"
+                              "  hint: split the decision over several states") from None
+
+
+def _compile_design(top, platform, name):
     frag = Fragment.get(top, platform)
     _check_fragment(frag)
     platform.bind_buffers(frag)
@@ -650,6 +682,8 @@ def compile_design(top, platform, name="top"):
     bodies = {int(case[0][0] or "0", 2): case[1] for case in sw.cases}
     case_loc = {int(case[0][0] or "0", 2): case[2] if len(case) > 2 else None for case in sw.cases}
     n = len(order)
+    if n > MAX_STATES:
+        _fail("the FSM has %d states; the compiler names at most %d, and a PIO program has at most 32 instructions" % (n, MAX_STATES))
     if order[0] != 0 or state_sig.init != 0:
         _fail("the FSM must start in the state that is defined first")
     ctx.pos = {sid: k for k, sid in enumerate(order)}
@@ -658,10 +692,10 @@ def compile_design(top, platform, name="top"):
     trees = [_exec(bodies[sid], ctx, None, {}, _user_loc(case_loc[sid], None)) for sid in order]
     for sig in list(platform._scratch.values()):
         if sig.init != 0:
-            _fail("scratch register %s resets to %d but the PIO registers reset to 0: assign the value in the first state" % (sig.name, sig.init))
+            _fail("scratch register %s resets to %s but the PIO registers reset to 0: assign the value in the first state" % (sig.name, _show(sig.init)))
     for info in platform._pio_pins:
         if info.o is not None and info.o.init != 0:
-            _fail("output pin %s_%s resets to %d but the PIO output level resets to 0" % (info.name, info.number, info.o.init))
+            _fail("output pin %s_%s resets to %s but the PIO output level resets to 0" % (info.name, info.number, _show(info.o.init)))
     return _build(platform, name, n, names, trees, ctx)
 
 
@@ -686,7 +720,15 @@ def _contiguous(info, what):
 
 
 def _leaves(t):
-    return _leaves(t.then) + _leaves(t.els) if isinstance(t, Br) else [t]
+    out, stack = [], [t]                 # iterative: a long Elif chain nests as deep as it is long
+    while stack:
+        t = stack.pop()
+        if isinstance(t, Br):
+            stack.append(t.els)
+            stack.append(t.then)
+        else:
+            out.append(t)
+    return out
 
 
 def _roles(platform, trees, ctx):

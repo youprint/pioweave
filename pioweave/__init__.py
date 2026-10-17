@@ -10,16 +10,21 @@ A design is an Amaranth module written in a restricted style (one FSM, one state
 project="pio" | "pico-c" | "micropython")` compiles it to PIO instructions and writes the project. Several such designs can run as the state machines of one block
 (`Block`, `Machine`, `BlockSim`, pioweave.block). Nothing has run on a chip. See the README and docs/.
 
-The public names load on first use (PEP 562, as amaranth.vendor does), so `import pioweave.builder` does not import Amaranth.
+The public names load on first use (PEP 562, as amaranth.vendor does), so `import pioweave.builder` does not import Amaranth. `import pioweave` checks the version of the installed
+Amaranth from its package metadata (`pioweave._gate`), without importing it; the compiler, project and block modules check ``amaranth.__version__`` again when they are imported.
 """
 import importlib
 import importlib.metadata
+
+from . import _gate
 
 # The version comes from the package metadata, which comes from the git tag (pdm-backend, source = "scm"), as in amaranth-soc.
 try:
     __version__ = importlib.metadata.version(__package__)
 except importlib.metadata.PackageNotFoundError:     # not installed with pip (running from a source tree)
     __version__ = "unknown"
+
+_gate.check_installed()       # the version gate: reads the metadata of the installed Amaranth, does not import it (UnsupportedAmaranth, unless PIOWEAVE_ALLOW_UNTESTED=1)
 
 _NAMES = {
     "UnsupportedAmaranth": "_compat", "check_version": "_compat",
