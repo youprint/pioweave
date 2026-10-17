@@ -113,7 +113,9 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
     -------
     dict
         ``{"waves": {gpio: waveform}`` for every output GPIO, ``"rx": [(cycle, word)]`` pushed to the RX FIFO, ``"rx_left"``: words still in it, ``"tx_left"``:
-        words still in the TX FIFO, ``"irq"``: the eight IRQ flags as a mask after each cycle (empty when the design uses none)``}``.
+        words still in the TX FIFO, ``"irq"``: the eight IRQ flags as a mask after each cycle (empty when the design uses none), ``"dirs"``: ``{gpio: waveform}`` of the pin
+        directions (``1`` = output) of the pins of groups with a direction register (``platform.directions``; empty when the design has none)``}``. For those pins the
+        waveform in ``"waves"`` is the pad: the design's output where the pin is an output, the stimulus where it is an input.
 
     Examples
     --------
@@ -121,7 +123,7 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
     >>> from pioweave.platform import RP2040PioPlatform
     >>> from pioweave.project import amaranth_run
     >>> amaranth_run(lambda: (SquareWave(), RP2040PioPlatform()), 8)
-    {'waves': {0: '11001100'}, 'rx': [], 'rx_left': 0, 'tx_left': 0, 'irq': []}
+    {'waves': {0: '11001100'}, 'rx': [], 'rx_left': 0, 'tx_left': 0, 'irq': [], 'dirs': {}}
     """
     design, platform = factory()
     platform.simulation = True
@@ -144,6 +146,19 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
             for k, g in enumerate(p.gpios):
                 outs[g] = (p.o, k)
     waves = {g: [] for g in outs}
+    dyn = [p for p in platform._pio_pins if p.dirs is not None and p.o is not None]       # groups with a direction register: the pad follows the direction
+    dyn_gpios = {g for p in dyn for g in p.gpios}
+    dir_waves = {g: [] for g in dyn_gpios}
+
+    def stim_bit(g, t):
+        w = stim.get(g, "0")
+        return int(w[min(t, len(w) - 1)])
+
+    def pad_of(ctx, p, t):
+        """The pad of the group `p` in cycle t, as seen with the registers as they are now: the design's output where the pin is an output, the stimulus elsewhere."""
+        o, d = ctx.get(p.o), ctx.get(p.dirs)
+        return [((o >> k) & 1) if (d >> k) & 1 else stim_bit(g, t) for k, g in enumerate(p.gpios)]
+
     fifo = platform._shifter.fifo if platform._shifter is not None else None
     rx, state = [], {}
     irqm = platform._shifter.irq_model if platform._shifter is not None else None
@@ -157,6 +172,9 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
                 levels[id(sig)] = (sig, levels.get(id(sig), (None, 0))[1] | (int(w[min(t, len(w) - 1)]) << k))
             for sig, value in levels.values():
                 ctx.set(sig, value)
+            for p in dyn:             # the instruction of this cycle reads the pad: own output where the pin is an output
+                if p.i is not None:
+                    ctx.set(p.port.i, sum(b << k for k, b in enumerate(pad_of(ctx, p, t))))
             if fifo is not None:
                 # a word the host writes in cycle t-1 is applied at the edge that ends it, so the instruction of cycle t sees it
                 due = [w for c, w in feeds if c == t + 1]
@@ -169,7 +187,12 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
                 ctx.set(fifo.host_rx_drain, 1 if drain else 0)
             await ctx.tick()
             for g, (sig, k) in outs.items():
-                waves[g].append(str((ctx.get(sig) >> k) & 1))
+                if g not in dyn_gpios:
+                    waves[g].append(str((ctx.get(sig) >> k) & 1))
+            for p in dyn:
+                for k, (g, b) in enumerate(zip(p.gpios, pad_of(ctx, p, t))):
+                    waves[g].append(str(b))
+                    dir_waves[g].append(str((ctx.get(p.dirs) >> k) & 1))
             if irqm is not None:
                 irq_trace.append(ctx.get(irqm.after))
             if fifo is not None and ctx.get(fifo.host_rx_pending):
@@ -183,7 +206,8 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_
     sim.add_clock(clock_period())
     sim.add_testbench(tb)
     sim.run()
-    return {"waves": {g: "".join(v) for g, v in waves.items()}, "rx": rx, "rx_left": state.get("rx_left", 0), "tx_left": state.get("tx_left", 0), "irq": irq_trace}
+    return {"waves": {g: "".join(v) for g, v in waves.items()}, "rx": rx, "rx_left": state.get("rx_left", 0), "tx_left": state.get("tx_left", 0), "irq": irq_trace,
+            "dirs": {g: "".join(v) for g, v in dir_waves.items()}}
 
 
 def amaranth_waves(factory, cycles, stim=None):
@@ -207,7 +231,7 @@ def amaranth_waves(factory, cycles, stim=None):
 
 
 # ----------------------------------------------------------------------------- files
-def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None, irq_set=(), irq_clear=(), golden_irq=None):
+def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None, irq_set=(), irq_clear=(), golden_irq=None, golden_dirs=None):
     lines = ["[pio.%s]" % name, 'source = "{root}/%s.pio"' % name, 'chip = "%s"' % chip, "",
              "[[pio.%s.sim]]" % name, 'name = "amaranth_reference"', "cycles = %d" % cycles]
     for k, v in compiled.sim_config().items():
@@ -235,7 +259,28 @@ def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), dr
         lines.append("[pio.%s.sim.expect]   # pad levels from the Amaranth simulation of the design, one character per clock cycle" % name)
         for g, w in sorted(golden.items()):
             lines.append('%d = "%s"' % (g, w))
+    if golden_dirs:
+        lines.append("")
+        lines.append("[pio.%s.sim.expect_dirs]   # pin directions from the Amaranth simulation (1 = output), one character per clock cycle" % name)
+        for g, w in sorted(golden_dirs.items()):
+            lines.append('%d = "%s"' % (g, w))
     return "\n".join(lines) + "\n"
+
+
+def _c_pindirs(compiled, info):
+    """The ``pio_sm_set_consecutive_pindirs`` calls (SDK ``hardware/pio.h``) that give the pins of the group `info` their initial directions: one call for a group whose direction is
+    fixed by the host (all outputs), one per run of equal bits for a group with a direction register (``platform.directions``, design note 2f)."""
+    if info.dirs is None:
+        return ["    pio_sm_set_consecutive_pindirs(pio, sm, %d, %d, true);" % (info.gpios[0], len(info.gpios))]
+    runs, k, n = [], 0, len(info.gpios)
+    while k < n:
+        bit = (info.dirs_init >> k) & 1
+        j = k
+        while j < n and (info.dirs_init >> j) & 1 == bit:
+            j += 1
+        runs.append("    pio_sm_set_consecutive_pindirs(pio, sm, %d, %d, %s);       // initial direction of the pins of %s_%s" % (info.gpios[k], j - k, "true" if bit else "false", info.name, info.number))
+        k = j
+    return runs
 
 
 def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
@@ -256,15 +301,13 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=(
               "    pio_sm_config c = %s_program_get_default_config(offset);" % name]
     if compiled.set_pin:
         b, n = compiled.set_pin.gpios[0], len(compiled.set_pin.gpios)
-        lines += ["    sm_config_set_set_pins(&c, %d, %d);" % (b, n), "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n),
-                  "    pio_sm_set_consecutive_pindirs(pio, sm, %d, %d, true);" % (b, n)]
+        lines += ["    sm_config_set_set_pins(&c, %d, %d);" % (b, n), "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n)] + _c_pindirs(compiled, compiled.set_pin)
     if compiled.side_pin:
         b, n = compiled.side_pin.gpios[0], len(compiled.side_pin.gpios)
-        lines += ["    sm_config_set_sideset_pins(&c, %d);" % b, "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n),
-                  "    pio_sm_set_consecutive_pindirs(pio, sm, %d, %d, true);" % (b, n)]
+        lines += ["    sm_config_set_sideset_pins(&c, %d);" % b, "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n)] + _c_pindirs(compiled, compiled.side_pin)
     if compiled.out_pin and compiled.out_pin is not compiled.set_pin and compiled.out_pin is not compiled.side_pin:
         b, n = compiled.out_pin.gpios[0], len(compiled.out_pin.gpios)
-        lines += ["    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n), "    pio_sm_set_consecutive_pindirs(pio, sm, %d, %d, true);" % (b, n)]
+        lines += ["    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n)] + _c_pindirs(compiled, compiled.out_pin)
     if compiled.out_pin:
         lines.append("    sm_config_set_out_pins(&c, %d, %d);" % (compiled.out_pin.gpios[0], len(compiled.out_pin.gpios)))
     if compiled.in_pin:
@@ -279,8 +322,13 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=(
         lines.append("    sm_config_set_in_pin_count(&c, %d);" % compiled.in_count)
     if compiled.status_sel:
         lines.append("    sm_config_set_mov_status(&c, %s, %d);" % ({"tx": "STATUS_TX_LESSTHAN", "rx": "STATUS_RX_LESSTHAN", "irq": "STATUS_IRQ_SET"}[compiled.status_sel], compiled.status_n))
+    covered = {id(p) for p in (compiled.set_pin, compiled.side_pin, compiled.out_pin) if p is not None}
+    for p in compiled.dir_pins:             # a group with a direction register that no instruction role set up above (for example one the program only reads)
+        if id(p) not in covered:
+            lines += ["    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (p.gpios[0], p.gpios[0] + len(p.gpios))] + _c_pindirs(compiled, p)
     for g in compiled.input_gpios:
-        lines += ["    pio_gpio_init(pio, %d);" % g, "    pio_sm_set_consecutive_pindirs(pio, sm, %d, 1, false);" % g]
+        if g not in compiled.dynamic_gpios:
+            lines += ["    pio_gpio_init(pio, %d);" % g, "    pio_sm_set_consecutive_pindirs(pio, sm, %d, 1, false);" % g]
     if compiled.jmp_gpio is not None:
         lines.append("    sm_config_set_jmp_pin(&c, %d);" % compiled.jmp_gpio)
     if platform.sm_clock_hz:
@@ -321,14 +369,21 @@ def _cmake(name, usb_stdio=False):
         "pico_add_extra_outputs(%s)" % name, ""])
 
 
+def _init_of(info):
+    """The MicroPython initial state of the pins of a group: all outputs low, or per pin the direction of the group's ``init`` (``rp2.PIO.IN_LOW`` for an input [verify])."""
+    n = len(info.gpios)
+    states = ["rp2.PIO.OUT_LOW" if info.dirs is None or (info.dirs_init >> k) & 1 else "rp2.PIO.IN_LOW" for k in range(n)]
+    return states[0] if n == 1 else "(%s)" % ", ".join(states)
+
+
 def _decorator(compiled):
     args = []
     if compiled.set_pin:
-        args.append("set_init=" + ("rp2.PIO.OUT_LOW" if len(compiled.set_pin.gpios) == 1 else "(%s)" % ", ".join(["rp2.PIO.OUT_LOW"] * len(compiled.set_pin.gpios))))
+        args.append("set_init=" + _init_of(compiled.set_pin))
     if compiled.side_pin:
-        args.append("sideset_init=" + ("rp2.PIO.OUT_LOW" if len(compiled.side_pin.gpios) == 1 else "(%s)" % ", ".join(["rp2.PIO.OUT_LOW"] * len(compiled.side_pin.gpios))))
+        args.append("sideset_init=" + _init_of(compiled.side_pin))
     if compiled.out_pin:
-        args.append("out_init=" + ("rp2.PIO.OUT_LOW" if len(compiled.out_pin.gpios) == 1 else "(%s)" % ", ".join(["rp2.PIO.OUT_LOW"] * len(compiled.out_pin.gpios))))
+        args.append("out_init=" + _init_of(compiled.out_pin))
     if compiled.out_shift:
         args.append("out_shiftdir=rp2.PIO.SHIFT_%s" % compiled.out_shift.upper())
     if compiled.in_shift:
@@ -347,6 +402,8 @@ def _decorator(compiled):
 
 
 def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
+    if compiled.side_pindirs:
+        raise PioProjectError("project='micropython' cannot configure a side-set that writes pin directions (rp2.asm_pio has no such option [verify]): use project='pico-c'")
     if compiled.status_sel or compiled.in_count is not None:
         raise PioProjectError("project='micropython' cannot configure `mov ..., status` or the IN pin count (rp2.asm_pio / rp2.StateMachine have no such option [verify]): use project='pico-c'")
     if pioasm is None:
@@ -438,14 +495,15 @@ def write_project(plan, compiled, platform, name, project, sim=None):
     factory, cycles, stim, tx, tx_feed, drain = sim.factory, sim.cycles, sim.stim, tuple(sim.tx), tuple(sim.tx_feed), sim.drain
     irq_set, irq_clear = tuple(sim.irq_set), tuple(sim.irq_clear)
     run = amaranth_run(factory, cycles, stim, tx, tx_feed, drain, irq_set, irq_clear) if factory is not None else None
-    golden = golden_rx = golden_irq = None
+    golden = golden_rx = golden_irq = golden_dirs = None
     if run is not None:
+        golden_dirs = {compiled.pin(g): w for g, w in run["dirs"].items()}
         golden = {compiled.pin(g): w for g, w in run["waves"].items() if g in compiled.output_gpios}
         golden_rx = run["rx"] if (compiled.uses_rx or run["rx"]) else None
         golden_irq = run["irq"][-1] if run["irq"] else None
     stim = {compiled.pin(g): w for g, w in (stim or {}).items()}      # bitweave takes the PIO's own pin numbers
     plan.add_file(name + ".pio", compiled.program.pio_text())
-    cfg = _toml_case(compiled, name, cycles, stim, golden, platform.chip, tx, tx_feed, drain, golden_rx, irq_set, irq_clear, golden_irq)
+    cfg = _toml_case(compiled, name, cycles, stim, golden, platform.chip, tx, tx_feed, drain, golden_rx, irq_set, irq_clear, golden_irq, golden_dirs)
     if project == "pico-c":
         plan.add_file("CMakeLists.txt", _cmake(name, compiled.uses_rx))
         plan.add_file("main.c", _c_main(compiled, name, platform, tx, tx_feed, irq_set, irq_clear))

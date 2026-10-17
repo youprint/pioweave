@@ -23,7 +23,7 @@ from amaranth.lib import io
 
 __all__ = [
     "PIO_GPIOS", "PinInfo", "RP2040PioPlatform", "RP2350PioPlatform", "RP2350APioPlatform", "RP2350BPioPlatform", "RP2354PioPlatform", "RP2354APioPlatform",
-    "RP2354BPioPlatform", "PLATFORMS", "gpio_resources",
+    "RP2354BPioPlatform", "PLATFORMS", "gpio_resources", "DirPin",
 ]
 
 PIO_GPIOS = 30
@@ -53,6 +53,10 @@ class PinInfo:
         The output and input signals of the `io.Buffer` wrapped around the port; bound by ``buffer`` or ``bind_buffers``.
     role : str or None
         None when the compiler infers how the pin is driven; ``"set"`` or ``"side"`` when forced with ``pio_role``.
+    dirs : amaranth.hdl.Signal or None
+        The direction register of the group (bit 1 = output), created by ``platform.directions``; None for a group whose direction is fixed by the host.
+    dirs_init : int
+        The direction the host configures before the state machine starts (the reset value of `dirs`).
     """
 
     def __init__(self, name, number, gpios, direction, port):
@@ -60,9 +64,33 @@ class PinInfo:
         self.port = port
         self.o = self.i = None     # the signals of the io.Buffer wrapped around the port
         self.role = None          # None: inferred by the compiler; or "set", "side"
+        self.dirs = None          # the direction register (platform.directions), None: fixed by the host
+        self.dirs_init = 0
+        self.dir_pin = None       # the DirPin the compiler sees assignments to `dirs` through
 
     def __repr__(self):
         return "PinInfo(%s_%s gpio %s dir %s)" % (self.name, self.number, self.gpios, self.dir)
+
+
+class DirPin:
+    """The direction register of a pin group as the compiler sees an assignment to it: it looks like an output pin (``o`` is the register) of the same GPIOs.
+
+    Attributes
+    ----------
+    info : PinInfo
+        The pin group the register belongs to.
+    o : amaranth.hdl.Signal
+        The direction register (one bit per pin, 1 = output).
+    gpios, name, number :
+        As the group's.
+    """
+
+    def __init__(self, info):
+        self.info, self.o, self.gpios, self.name, self.number = info, info.dirs, info.gpios, info.name, info.number
+        self.role = None
+
+    def __repr__(self):
+        return "DirPin(%s_%s gpio %s)" % (self.name, self.number, self.gpios)
 
 
 class _RPPioPlatform(Platform):
@@ -177,6 +205,64 @@ class _RPPioPlatform(Platform):
         m.submodules["%s_%s" % (name, number)] = buf
         self._bind(buf)
         return buf
+
+    def directions(self, pin, init=0):
+        """The direction register of a pin group: a signal with one bit per pin (1 = output), so that the design can change the directions while it runs (design note 2f).
+
+        Without this call a group has the direction the host configures and keeps it. With it the program can change the directions: ``sh.out(m, d, n)`` is ``out pindirs, n``,
+        ``sh.mov(m, d, src)`` is ``mov pindirs, src`` (PIO version 1), and ``m.d.sync += d.eq(C)`` alone in a state is ``set pindirs, C`` (with other work in the state, or in a
+        state with a test, it is the side-set when the program's side-set drives pin directions). The pad of a pin that is an input is not driven by ``pin.o``: it follows the
+        outside world (the simulation takes it from the stimulus), and ``pin.i`` of a bidirectional buffer reads the pad.
+
+        Parameters
+        ----------
+        pin : amaranth.lib.io.Buffer
+            A buffer returned by `buffer` with the direction ``"o"`` or ``"io"``.
+        init : int
+            The directions the host configures before the state machine starts (also the reset value of the register); 0 to ``2**width - 1``.
+
+        Returns
+        -------
+        amaranth.hdl.Signal
+            The register; the same signal on every call for the same group.
+
+        Raises
+        ------
+        ValueError
+            If the buffer is not an output or bidirectional buffer of this platform, `init` does not fit the group, or the group already has a register with another `init`.
+        """
+        info = next((p for p in self._pio_pins if p.port is getattr(pin, "port", None)), None)
+        if info is None:
+            raise ValueError("%r was not requested from this platform" % (pin,))
+        if getattr(getattr(pin, "direction", None), "name", None) not in ("Output", "Bidir"):
+            raise ValueError("directions() needs a buffer that can drive the pins (direction \"o\" or \"io\"), not %r" % (pin,))
+        width = len(info.gpios)
+        if not isinstance(init, int) or isinstance(init, bool) or not 0 <= init < 1 << width:
+            raise ValueError("init is the initial direction of %d pin(s): an integer from 0 to %d, not %r" % (width, (1 << width) - 1, init))
+        if info.dirs is None:
+            info.dirs, info.dirs_init = Signal(width, init=init, name="%s_%s_dirs" % (info.name, info.number)), init
+            info.dir_pin = DirPin(info)
+        elif info.dirs_init != init:
+            raise ValueError("the direction register of %s_%s already exists with init %d, not %d" % (info.name, info.number, info.dirs_init, init))
+        return info.dirs
+
+    def dirs_info(self, signal):
+        """The `DirPin` whose register is `signal`, or None.
+
+        Parameters
+        ----------
+        signal : amaranth.hdl.Signal
+            A signal.
+
+        Returns
+        -------
+        DirPin or None
+            The direction register's companion object.
+        """
+        for p in self._pio_pins:
+            if p.dirs is signal:
+                return p.dir_pin
+        return None
 
     def _bind(self, buf):
         for p in self._pio_pins:

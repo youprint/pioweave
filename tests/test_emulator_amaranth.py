@@ -35,6 +35,7 @@ class AmaranthAgreementTests(support.TestCase):
         self.assertTrue(cosim.same_rx(a, e, opts.get("drain", True)))
         self.assertEqual((a["tx_left"], a["rx_left"]), (e["tx_left"], e["rx_left"]))
         self.assertTrue(same_irq(a, e))
+        self.assertEqual(a["dirs"], e["dirs"])
 
     @support.parametrize("seed", range(N))
     def test_random_designs_agree_with_the_amaranth_simulation(self, seed):
@@ -42,7 +43,9 @@ class AmaranthAgreementTests(support.TestCase):
         compiled, a, e, waves = both(cosim.random_factory(spec), 160, spec["stim"])
         undriven = {g: w for g, w in a["waves"].items() if g not in waves}
         self.assertTrue(all(set(w) <= {"0"} for w in undriven.values()))
-        self.assertEqual({g: w for g, w in a["waves"].items() if g in waves}, waves, "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec))
+        why = "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec)
+        self.assertEqual({g: w for g, w in a["waves"].items() if g in waves}, waves, why)
+        self.assertEqual(a["dirs"], e["dirs"], why)
 
     @support.parametrize("seed", range(N))
     def test_random_data_path_designs_agree_with_the_amaranth_simulation(self, seed):
@@ -53,3 +56,4 @@ class AmaranthAgreementTests(support.TestCase):
         self.assertTrue(cosim.same_rx(a, e, spec["drain"]), why)
         self.assertEqual((a["tx_left"], a["rx_left"]), (e["tx_left"], e["rx_left"]), why)
         self.assertTrue(same_irq(a, e), why + "\n%s\n%s" % (a["irq"], e["irq"]))
+        self.assertEqual(a["dirs"], e["dirs"], why)

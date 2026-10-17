@@ -4,8 +4,7 @@ Change log
 This document records changes to pioweave in the style of Amaranth's ``changes.rst``: one section per version, with the entries grouped under Added, Changed and Removed. Dates are ISO 8601. Facts about hardware are marked ``[verify]`` where they are not checked; nothing has run on a chip.
 
 Version 0.1.0 (unreleased)
-==========================
-
+===================
 Added
 -----
 
@@ -19,6 +18,7 @@ Added
 - The version gate: ``import pioweave`` accepts Amaranth 0.5.0 to 0.5.10 and one tested 0.6 development commit (``UnsupportedAmaranth``, ``PIOWEAVE_ALLOW_UNTESTED=1``), and ``scripts/matrix.sh`` runs the suite against other versions.
 - Error messages of the builder, the compiler, the project writer and the version gate carry a short ``hint:`` line with what to change for the most common mistakes; the original text is unchanged.
 - ``python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON`` (``pioweave.emulator.check.check_case`` and ``main``): runs one bitweave simulation case, given as the JSON ``pioasm -o json`` writes and the case as a JSON object, in the emulator and prints one JSON object (``ok``, ``error``, the pad and direction waveforms, the words received, the FIFO counts, the final registers, the keys it does not support), so that bitweave's ``cross_check = "pioweave"`` can compare the two simulators; tested directly and against bitweave's ``pio`` flow on random programs.
+- Pin directions in the Amaranth front end: ``platform.directions(buffer, init)`` gives a pin group a direction register; ``sh.out(m, d, n)`` is ``out pindirs``, ``sh.mov(m, d, src)`` is ``mov pindirs`` (PIO version 1), ``d.eq(C)`` alone in a state is ``set pindirs`` and in a state with other work it is a side-set that writes directions (``.side_set N opt pindirs``). The simulations report the pad (the design's output where the pin is an output, the stimulus elsewhere) and the directions per cycle (``amaranth_run(...)["dirs"]``, ``expect_dirs`` in the generated case), the C project sets the initial directions per run of equal bits, and two example designs (``open_drain``, ``bus_turnaround``) show the forms.
 - Documentation in reStructuredText (Sphinx, with the examples run by ``sphinx-build -b doctest``): getting started, designing for PIO, the data path, the builder, the emulator, boards, projects, compatibility, testing, examples, releasing, the API reference and the design notes.
 
 Changed

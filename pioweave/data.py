@@ -30,7 +30,7 @@ from amaranth.lib.wiring import In, Out
 
 __all__ = [
     "DEPTH", "PULL_BLOCK", "PULL_NOBLOCK", "PUSH_BLOCK", "PUSH_NOBLOCK", "OUT_PINS", "OUT_X", "OUT_Y", "OUT_NULL", "IN_PINS", "IN_X", "IN_Y", "IN_NULL", "OUT_ISR", "IN_ISR",
-    "IN_OSR", "MOV", "IRQ_SET", "IRQ_CLEAR", "IRQ_WAIT", "WAIT_IRQ", "OUT_CODES", "IN_CODES", "MOV_DST", "MOV_SRC", "MOV_OP", "NAMES",
+    "IN_OSR", "MOV", "OUT_PINDIRS", "IRQ_SET", "IRQ_CLEAR", "IRQ_WAIT", "WAIT_IRQ", "OUT_CODES", "IN_CODES", "MOV_DST", "MOV_SRC", "MOV_OP", "NAMES",
     "FifoModel", "IrqModel", "ShiftFlags", "Shifter",
 ]
 
@@ -42,13 +42,14 @@ OUT_PINS, OUT_X, OUT_Y, OUT_NULL = 5, 6, 7, 8
 IN_PINS, IN_X, IN_Y, IN_NULL = 9, 10, 11, 12
 OUT_ISR, IN_ISR, IN_OSR, MOV = 13, 14, 15, 16
 IRQ_SET, IRQ_CLEAR, IRQ_WAIT, WAIT_IRQ = 17, 18, 19, 20
+OUT_PINDIRS = 21
 NAMES = {PULL_BLOCK: "pull block", PULL_NOBLOCK: "pull noblock", PUSH_BLOCK: "push block", PUSH_NOBLOCK: "push noblock", OUT_PINS: "out pins", OUT_X: "out x",
          OUT_Y: "out y", OUT_NULL: "out null", IN_PINS: "in pins", IN_X: "in x", IN_Y: "in y", IN_NULL: "in null", OUT_ISR: "out isr", IN_ISR: "in isr", IN_OSR: "in osr",
-         MOV: "mov", IRQ_SET: "irq set", IRQ_CLEAR: "irq clear", IRQ_WAIT: "irq wait", WAIT_IRQ: "wait irq"}
-OUT_CODES = (OUT_PINS, OUT_X, OUT_Y, OUT_NULL, OUT_ISR)
+         MOV: "mov", IRQ_SET: "irq set", IRQ_CLEAR: "irq clear", IRQ_WAIT: "irq wait", WAIT_IRQ: "wait irq", OUT_PINDIRS: "out pindirs"}
+OUT_CODES = (OUT_PINS, OUT_X, OUT_Y, OUT_NULL, OUT_ISR, OUT_PINDIRS)
 IN_CODES = (IN_PINS, IN_X, IN_Y, IN_NULL, IN_ISR, IN_OSR)
 # the encoding of a `mov` in the marker `arg` (the 3-bit fields of the instruction word): dst | src << 3 | op << 6
-MOV_DST = {"pins": 0, "x": 1, "y": 2, "isr": 6, "osr": 7}
+MOV_DST = {"pins": 0, "x": 1, "y": 2, "pindirs": 3, "isr": 6, "osr": 7}
 MOV_SRC = {"pins": 0, "x": 1, "y": 2, "null": 3, "status": 5, "isr": 6, "osr": 7}
 MOV_OP = {"none": 0, "invert": 1, "reverse": 2}
 
@@ -540,14 +541,15 @@ class Shifter:
 
         Without autopull a plain call is enough. With autopull the instruction can stall (design note 2b): write ``with sh.out(m, dest, n): m.next = ...``; the body
         runs in the cycle the instruction completes, and the state stays while the OSR waits for the TX FIFO. ``out isr, n`` also sets the ISR bit count to ``n``.
-        ``out pindirs``, ``out pc`` and ``out exec`` are not supported (design note 2c).
+        ``out pindirs, n`` takes the direction register of a pin group (``platform.directions(buffer)``) as `dest` (design note 2f). ``out pc`` and ``out exec`` are not supported
+        (design note 2c).
 
         Parameters
         ----------
         m : amaranth.hdl.Module
             The module of the design, inside the FSM state that does the out.
         dest : object or str
-            A buffer from ``platform.buffer(m, "o", ...)``, or ``"x"``, ``"y"``, ``"null"`` or ``"isr"``.
+            A buffer from ``platform.buffer(m, "o", ...)``, the direction register of a pin group (``out pindirs``), or ``"x"``, ``"y"``, ``"null"`` or ``"isr"``.
         n : int or None
             The bit count, 1 to 32 (a constant); None means the width of the pin group, or 32.
 
@@ -562,12 +564,19 @@ class Shifter:
             If `n` is not a constant in range, or `dest` is a destination the Amaranth front end does not support.
         """
         if isinstance(dest, str):
-            if dest in ("pindirs", "pc", "exec"):
+            if dest == "pindirs":
+                raise ValueError("out pindirs needs the direction register of a pin group as the destination, not the string: %s" % UNSUPPORTED["pindirs"])
+            if dest in ("pc", "exec"):
                 raise ValueError("out %s is not supported by the Amaranth front end: %s" % (dest, UNSUPPORTED[dest]))
             if dest not in ("x", "y", "null", "isr"):
                 raise ValueError('the destination of out is a pin group, "x", "y", "null" or "isr", not %r' % (dest,))
             n = self._count(32 if n is None else n)
             code = {"x": OUT_X, "y": OUT_Y, "null": OUT_NULL, "isr": OUT_ISR}[dest]
+        elif isinstance(dest, Signal):
+            if self.platform.dirs_info(dest) is None:
+                raise ValueError("out pindirs needs the direction register of a pin group from platform.directions(buffer), not %r" % (dest.name,))
+            n = self._count(len(dest) if n is None else n)
+            code = OUT_PINDIRS
         else:
             n = self._count(len(dest.o) if n is None else n)
             code = OUT_PINS
@@ -579,6 +588,8 @@ class Shifter:
                 m.d.sync += self.platform.scratch(dest).eq(data)
             elif code == OUT_PINS:
                 m.d.sync += dest.o.eq(data)
+            elif code == OUT_PINDIRS:
+                m.d.sync += dest.eq(data)
             elif code == OUT_ISR:
                 m.d.sync += [self.isr.eq(data), self.isr_n.eq(n)]
             self._osr_shift(m, n)
@@ -648,7 +659,8 @@ class Shifter:
         ``dst``: ``"x"``, ``"y"``, ``"osr"``, ``"isr"`` or an output pin group from platform.buffer() (the OUT group: its width is the ``out_count``). ``src``: ``"x"``, ``"y"``,
         ``"null"``, ``"status"``, ``"isr"``, ``"osr"`` or an input pin group (PIO version 1 only: the program then masks the input to the width of the group with
         ``in_count``; PIO version 0 reads 32 pins). ``op``: ``"none"``, ``"invert"`` (``!``) or ``"reverse"`` (``::``, bit reverse). ``mov status`` needs ``status="tx"|"rx"|"irq"`` and
-        ``status_n=N`` in ``platform.shifter``: all ones while the FIFO level is below N (``"irq"``, PIO version 1: while IRQ flag N is set). ``mov pindirs``, ``mov pc`` and ``mov exec`` are not supported (design note 2c).
+        ``status_n=N`` in ``platform.shifter``: all ones while the FIFO level is below N (``"irq"``, PIO version 1: while IRQ flag N is set). ``dst`` can also be the direction register of a pin group
+        (``platform.directions(buffer)``): ``mov pindirs, src``, PIO version 1 only (design note 2f). ``mov pc`` and ``mov exec`` are not supported (design note 2c).
 
         Parameters
         ----------
@@ -667,11 +679,19 @@ class Shifter:
         if op not in MOV_OP:
             raise ValueError('op is "none", "invert" or "reverse", not %r' % (op,))
         if isinstance(dst, str):
-            if dst in ("pindirs", "pc", "exec"):
+            if dst == "pindirs":
+                raise ValueError("mov pindirs needs the direction register of a pin group as the destination, not the string: %s" % UNSUPPORTED["pindirs"])
+            if dst in ("pc", "exec"):
                 raise ValueError("mov %s is not supported by the Amaranth front end: %s" % (dst, UNSUPPORTED[dst]))
             if dst not in ("x", "y", "osr", "isr"):
                 raise ValueError('the destination of mov is a pin group, "x", "y", "osr" or "isr", not %r' % (dst,))
             dname = dst
+        elif isinstance(dst, Signal):
+            if self.platform.dirs_info(dst) is None:
+                raise ValueError("mov pindirs needs the direction register of a pin group from platform.directions(buffer), not %r" % (dst.name,))
+            if getattr(self.platform, "pio_version", 1) < 1:
+                raise ValueError("mov pindirs needs PIO version 1 (RP2350 / RP2354); on the RP2040 use out pindirs or set pindirs")
+            dname = "pindirs"
         else:
             dname = "pins"
         f = self.fifo
@@ -707,6 +727,8 @@ class Shifter:
             m.d.sync += self.platform.scratch(dname).eq(val)
         elif dname == "pins":
             m.d.sync += dst.o.eq(val[:len(dst.o)])
+        elif dname == "pindirs":
+            m.d.sync += dst.eq(val[:len(dst)])
         elif dname == "isr":
             m.d.sync += [self.isr.eq(val), self.isr_n.eq(0)]
         else:
@@ -858,7 +880,7 @@ class Shifter:
 
 
 UNSUPPORTED = {
-    "pindirs": "the model has no pin direction state (pins are Buffer outputs; directions are fixed by the host configuration)",
+    "pindirs": "pass d = platform.directions(buffer) as the destination, which names the pin group (design note 2f)",
     "pc": "a computed jump: an FSM state cannot jump to an address that is data",
     "exec": "an executed instruction taken from data is not an FSM state",
 }

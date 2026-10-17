@@ -31,6 +31,8 @@ The helpers
      - ``out pins, N`` (N defaults to the width of the pin group)
    * - ``sh.out(m, "x" / "y" / "null", n)``
      - ``out x, n`` / ``out y, n`` / ``out null, n`` (discard n bits)
+   * - ``sh.out(m, d, n)`` with ``d = platform.directions(pin)``
+     - ``out pindirs, n``: the pin directions of the group (:ref:`pin-directions`)
    * - ``sh.in_(m, pin)`` or ``sh.in_(m, pin, n)``
      - ``in pins, N`` (N defaults to the width of the pin group, at most the width)
    * - ``sh.in_(m, "x" / "y" / "null", n)``
@@ -42,7 +44,7 @@ The helpers
    * - ``sh.in_(m, "isr" / "osr", n)``
      - ``in isr, n`` / ``in osr, n``
    * - ``sh.mov(m, dst, src, op="none")``
-     - ``mov dst, [op] src`` with the OSR, ISR, pins or status on a side; ``dst``: ``"x"``, ``"y"``, ``"osr"``, ``"isr"`` or an output pin group; ``src``: ``"x"``, ``"y"``, ``"null"``, ``"status"``, ``"isr"``, ``"osr"`` or an input pin group (PIO version 1); ``op``: ``"none"``, ``"invert"``, ``"reverse"``
+     - ``mov dst, [op] src`` with the OSR, ISR, pins or status on a side; ``dst``: ``"x"``, ``"y"``, ``"osr"``, ``"isr"``, an output pin group, or a direction register ``d`` (``mov pindirs``, PIO version 1); ``src``: ``"x"``, ``"y"``, ``"null"``, ``"status"``, ``"isr"``, ``"osr"`` or an input pin group (PIO version 1); ``op``: ``"none"``, ``"invert"``, ``"reverse"``
    * - ``sh.irq(m, f)`` / ``sh.irq(m, f, "clear")``
      - ``irq set f`` / ``irq clear f`` (``rel=True`` adds ``rel``)
    * - ``with sh.irq(m, f, "wait"): m.next = ...``
@@ -68,7 +70,7 @@ Rules that follow from the instructions:
 
 ``platform.shifter(m, status="tx", status_n=2)`` selects the source of ``mov ..., status`` (``"tx"`` or ``"rx"``, the FIFO level below ``status_n``). The thresholds ``pull_thresh`` and ``push_thresh`` also apply to ``pull ifempty``, ``push iffull`` and ``jmp !osre`` without autopull.
 
-``out pindirs``, ``out pc``, ``out exec`` and the same three destinations of ``mov`` are not supported; the helpers raise ``ValueError`` with the reason when the design is written (the model has no pin direction state; ``pc`` and ``exec`` would be jumps and instructions taken from data, which an FSM state cannot express). ``mov x, pins`` is for PIO version 1 only: the program masks the input to the width of the pin group (``in_count``), while PIO version 0 would also read the neighbouring pins, which the model cannot reproduce.
+``out pc``, ``out exec`` and the same two destinations of ``mov`` are not supported; the helpers raise ``ValueError`` with the reason when the design is written (``pc`` and ``exec`` would be jumps and instructions taken from data, which an FSM state cannot express). ``pindirs`` is supported through a direction register, see :ref:`pin-directions`; naming it with the string ``"pindirs"`` is refused, because the string cannot say which pin group is meant. ``mov x, pins`` is for PIO version 1 only: the program masks the input to the width of the pin group (``in_count``), while PIO version 0 would also read the neighbouring pins, which the model cannot reproduce.
 
 .. _autopull-autopush:
 
@@ -115,6 +117,46 @@ The ``spi_master`` example is exactly that; it compiles to two instructions, wit
 A plain ``sh.out(m, ...)`` or ``sh.in_(m, ...)`` with autopull or autopush on is a design error and ``PioCompileError`` names the line (the state would not stall, so the Amaranth simulation and the program would differ). Without autopull or autopush the plain call stays valid, and so does the ``with`` form (its body always runs).
 
 The configuration reaches the generated code: ``sm_config_set_out_shift(&c, right, autopull, pull_thresh)`` and ``sm_config_set_in_shift(&c, right, autopush, push_thresh)`` in C, ``autopull=True``, ``autopush=True``, ``pull_thresh=``, ``push_thresh=`` in the MicroPython decorator [verify the keyword names on a device], and ``autopull``, ``autopush``, ``pull_thresh``, ``push_thresh`` in the bitweave case and in ``Compiled.sim_config()``.
+
+.. _pin-directions:
+
+Pin directions
+--------------
+
+A pin group has the direction the host configures and keeps it, unless the design asks for a direction register: ``d = platform.directions(buffer, init=0)`` gives one bit per pin (1 = output); ``init`` is the direction the host sets before the state machine starts (``pio_sm_set_consecutive_pindirs`` in the C project, ``dirs`` in the bitweave case). The register is changed by the program:
+
+- ``sh.out(m, d, n)`` is ``out pindirs, n`` and ``sh.mov(m, d, src, op)`` is ``mov pindirs, src`` (PIO version 1 only); the group of ``d`` is the OUT group, as for ``out pins``.
+- ``m.d.sync += d.eq(C)`` alone in a state is ``set pindirs, C``; the group of ``d`` is the SET group, so a program that also uses ``set pins`` must use the same group.
+- ``m.d.sync += d.eq(C)`` in a state that does something else (a register operation, a data operation, a test) is the side-set, and then the whole side-set of the program writes pin directions (``.side_set N opt pindirs``): levels and directions cannot both be the side-set of one program.
+
+``pin.o`` keeps being the output level register: ``set pins``, ``out pins`` and the rest write it whatever the direction. What a pin shows is the pad, the design's output where the pin is an output and the outside world (the stimulus) where it is an input; ``pin.i`` of a bidirectional buffer (``platform.buffer(m, "io", ...)``) reads the pad. The simulations report both: ``amaranth_run`` returns the pad in ``"waves"`` and the directions after each cycle in ``"dirs"``, and the generated case carries ``expect`` and ``expect_dirs``. An open-drain line is the level register held at 0 and the direction toggled (``open_drain`` example: it pulls the line low for three cycles, lets go, and waits until the line is high, which another device may hold low):
+
+.. testcode::
+
+   from pioweave import PLATFORMS, amaranth_run, compile_design
+   from pioweave.designs import OpenDrain
+
+   factory = lambda: (OpenDrain(), PLATFORMS["rp2040"]())
+   design, platform = factory()
+   compiled = compile_design(design, platform, "od")
+   print(compiled.program.pio_text().strip())
+   print(compiled.sim_config())
+   run = amaranth_run(factory, 24, {0: "111111110000111111111111"})
+   print(run["waves"][0])
+   print(run["dirs"][0])
+
+.. testoutput::
+
+   .program od
+   .pio_version 0
+       set pindirs, 1 [2]
+       set pindirs, 0
+       wait 1 gpio 0 [2]
+   {'set_base': 0, 'set_count': 1, 'dirs': 0}
+   000111100000111000111100
+   111000011100000111000011
+
+The design pulls the line low in cycles 0 to 2 (direction 1) and lets it go in cycle 3, after which the pad follows the outside world: high through cycle 6. When it lets go again in cycle 10, another device is holding the line low (stimulus 0 in cycles 8 to 11), so the ``wait`` stalls until the stimulus is high again in cycle 12. The ``bus_turnaround`` example (RP2350) takes a word from the TX FIFO, drives its first nibble on a four-pin bus (``out pins, 4``), makes the second nibble the directions (``out pindirs, 4``), reads the pad (``in pins, 4``) and releases the bus (``mov pindirs, null``). Refused: ``mov pindirs`` on PIO version 0 (use ``out pindirs`` or ``set pindirs``), the register in a test or sliced, anything but a constant (or the helper bits) assigned to it, ``set pindirs`` for a group other than the SET group, a jump in the same state, and the combinations that would need two instructions. Design note section 2f has the model and the rules.
 
 Joined FIFOs and ``wait pin``
 -----------------------------
@@ -172,6 +214,10 @@ The examples with a data path in ``pioweave/designs.py`` (``python -m pioweave l
      - ``wait 1 pin 1`` and ``wait 0 pin 0`` on a three-pin input group; the output follows.
    * - ``tx_join``
      - ``fifo_join="tx"``: eight words wait in the joined TX FIFO, ``pull block``, ``out pins, 4``.
+   * - ``open_drain``
+     - pin directions: ``set pindirs, 1 [2]`` pulls a line low (the level register stays 0), ``set pindirs, 0`` lets it go, ``wait 1 gpio 0 [2]`` waits for the line to be high.
+   * - ``bus_turnaround``
+     - ``out pins, 4``, ``out pindirs, 4``, ``in pins, 4``, ``push block``, ``mov pindirs, null`` on a four-pin bidirectional bus (RP2350).
    * - ``spi_master``
      - a full-duplex SPI master (mode 0, 8 bits, MSB first) with autopull and autopush: ``out pins, 1 side 0 [1]`` and ``in pins, 1 side 1 [1]``, two instructions in all.
 

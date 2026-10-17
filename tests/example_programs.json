@@ -1,4 +1,23 @@
 {
+ "bus_turnaround": {
+  "chip": "rp2350",
+  "sim_config": {
+   "dirs": 0,
+   "in_base": 4,
+   "in_shift": "right",
+   "out_base": 4,
+   "out_count": 4,
+   "out_shift": "right"
+  },
+  "words": [
+   32928,
+   24580,
+   24708,
+   16388,
+   32800,
+   41059
+  ]
+ },
  "button_pulse": {
   "chip": "rp2350",
   "sim_config": {
@@ -92,6 +111,19 @@
    24640,
    16448,
    32768
+  ]
+ },
+ "open_drain": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 0,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   57985,
+   57472,
+   8832
   ]
  },
  "osre_loop": {

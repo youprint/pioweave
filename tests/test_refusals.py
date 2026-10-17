@@ -10,7 +10,7 @@ from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
 from pioweave.compile import PioCompileError, compile_design  # noqa: E402
-from pioweave.platform import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
+from pioweave.platform import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
 
 from . import support  # noqa: E402
 
@@ -753,11 +753,15 @@ class ExtendedInstructionRefusalTests(RefusalCase):
 
     def test_unsupported_destinations_are_errors_when_the_design_is_written(self):
         m, sh = shifter_for_misuse(RP2350PioPlatform())
-        for dest, why in (("pindirs", "no pin direction state"), ("pc", "computed jump"), ("exec", "executed instruction")):
+        for dest, why in (("pc", "computed jump"), ("exec", "executed instruction")):
             with self.assertRaisesRegex(ValueError, "out %s is not supported.*%s" % (dest, why)):
                 sh.out(m, dest, 4)
             with self.assertRaisesRegex(ValueError, "mov %s is not supported.*%s" % (dest, why)):
                 sh.mov(m, dest, "x")
+        with self.assertRaisesRegex(ValueError, "out pindirs needs the direction register of a pin group as the destination, not the string.*platform.directions"):
+            sh.out(m, "pindirs", 4)
+        with self.assertRaisesRegex(ValueError, "mov pindirs needs the direction register of a pin group as the destination, not the string.*platform.directions"):
+            sh.mov(m, "pindirs", "x")
         with self.assertRaisesRegex(ValueError, "destination of out"):
             sh.out(m, "z", 1)
         with self.assertRaisesRegex(ValueError, "source of in"):
@@ -1039,3 +1043,207 @@ class WaitPinAndJoinRefusalTests(RefusalCase):
         for bad in ("both", "txrx", None, 4):
             with self.assertRaisesRegex(ValueError, "fifo_join is"):
                 RP2040PioPlatform().shifter(spare_module(), fifo_join=bad)
+
+
+def dir_body(states, chip=RP2350PioPlatform, shifter=True, init=0, **config):
+    """A design with a bidirectional bus (GPIO 4 to 6, `bus`, with a direction register), a second one (GPIO 10, `aux`, also with a register), an output (GPIO 0) and an input
+    (GPIO 8); `states` gets (m, sh, bus, d, aux, da, out, inp, x) and returns [(name, fn)]."""
+    def body(m, pl):
+        pl.add_resources([Resource("bus", 0, Pins("4 5 6", dir="io")), Resource("aux", 0, Pins("10", dir="io"))])
+        sh = pl.shifter(m, **config) if shifter else None
+        bus = pl.buffer(m, "io", "bus", 0)
+        d = pl.directions(bus, init=init)
+        aux = pl.buffer(m, "io", "aux", 0)
+        da = pl.directions(aux)
+        out = pl.buffer(m, "o", "gpio", 0)
+        inp = pl.buffer(m, "i", "gpio", 8)
+        x = pl.scratch("x")
+        fsm_states(m, states(m, sh, bus, d, aux, da, out, inp, x))
+    return body
+
+
+@support.cases
+class PinDirectionRefusalTests(RefusalCase):
+    """Pin directions (design note 2f): what the helpers and the compiler refuse."""
+
+    def test_the_direction_register_is_checked_when_the_design_is_written(self):
+        pl = RP2350PioPlatform()
+        pl.add_resources([Resource("bus", 0, Pins("4 5 6", dir="io"))])
+        m = spare_module()
+        bus = pl.buffer(m, "io", "bus", 0)
+        bus._MustUse__silence = True
+        for bad in (8, -1, 2.5, True, "1"):
+            with self.assertRaisesRegex(ValueError, "initial direction of 3 pin"):
+                pl.directions(bus, init=bad)
+        d = pl.directions(bus, init=5)
+        self.assertIs(pl.directions(bus, init=5), d)
+        with self.assertRaisesRegex(ValueError, "already exists with init 5, not 2"):
+            pl.directions(bus, init=2)
+        self.assertEqual((len(d), d.init), (3, 5))
+        inp = pl.buffer(m, "i", "gpio", 8)
+        inp._MustUse__silence = True
+        with self.assertRaisesRegex(ValueError, 'needs a buffer that can drive the pins'):
+            pl.directions(inp)
+        with self.assertRaisesRegex(ValueError, "was not requested from this platform"):
+            pl.directions(object())
+
+    def test_out_and_mov_need_the_register_of_a_group_of_this_platform(self):
+        m, sh = shifter_for_misuse(RP2350PioPlatform())
+        with self.assertRaisesRegex(ValueError, "out pindirs needs the direction register"):
+            sh.out(m, Signal(3), 3)
+        with self.assertRaisesRegex(ValueError, "mov pindirs needs the direction register"):
+            sh.mov(m, Signal(3), "x")
+
+    def test_mov_pindirs_needs_pio_version_1(self):
+        pl = RP2040PioPlatform()
+        pl.add_resources([Resource("bus", 0, Pins("4 5 6", dir="io"))])
+        m, sh = shifter_for_misuse(pl)
+        bus = pl.buffer(m, "io", "bus", 0)
+        bus._MustUse__silence = True
+        d = pl.directions(bus)
+        with self.assertRaisesRegex(ValueError, "mov pindirs needs PIO version 1.*out pindirs or set pindirs"):
+            sh.mov(m, d, "x")
+        sh.out(m, d, 3)           # out pindirs exists on both versions
+
+    def test_set_pindirs_cannot_be_followed_by_a_jump(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += d.eq(3)
+                m.next = "C"                           # skips B: the jump would be a second instruction
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states, shifter=False), "changes pin directions and then jumps to another state needs two PIO instructions")
+
+    def test_a_level_assigned_with_set_pindirs_is_the_side_set(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += [d.eq(3), out.o.eq(1)]
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        c = compile_body(dir_body(states, shifter=False), chip=RP2350PioPlatform)
+        self.assertIn("set pindirs, 3 side 1", c.program.pio_text())
+
+    def test_set_pins_and_set_pindirs_must_address_one_group(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += out.o.eq(1)               # set pins on GPIO 0
+                m.next = "B"
+
+            def b():
+                m.d.sync += d.eq(2)                    # set pindirs on the bus: another SET group
+                m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(dir_body(states, shifter=False), "`set pins` drives gpio_0 but `set pindirs` changes bus_0; PIO has one SET group")
+
+    def test_set_pindirs_on_two_groups(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += d.eq(2)
+                m.next = "B"
+
+            def b():
+                m.d.sync += da.eq(1)
+                m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(dir_body(states, shifter=False), "`set pindirs` is used on more than one pin group")
+
+    def test_the_side_set_writes_levels_or_directions_not_both(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += [d.eq(2), x.eq(1)]         # directions as the side-set of `set x`
+                m.next = "B"
+
+            def b():
+                m.d.sync += out.o.eq(1)
+                m.d.sync += x.eq(2)                    # a level as the side-set
+                m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(dir_body(states, shifter=False), "writes either pin levels .* or pin directions .*, not both")
+
+    def test_the_side_set_directions_of_two_groups(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += [d.eq(2), x.eq(1)]
+                m.next = "B"
+
+            def b():
+                m.d.sync += [da.eq(1), x.eq(2)]
+                m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(dir_body(states, shifter=False), "writes the directions of more than one pin group")
+
+    def test_directions_of_two_groups_in_one_state(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += [d.eq(2), da.eq(1)]
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states, shifter=False), "directions of two pin groups needs two PIO instructions|more than one pin group")
+
+    def test_a_direction_register_takes_constants_or_the_helper_bits_only(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += d.eq(x[:3])
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states, shifter=False), "direction register of bus_0 can only be assigned a constant")
+
+    def test_the_direction_register_cannot_be_tested_or_sliced(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                with m.If(d[0]):
+                    m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states, shifter=False), "not an input pin")
+
+        def states2(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                m.d.sync += d[0].eq(1)
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states2, shifter=False), "parts of a signal")
+
+    def test_out_pindirs_and_out_pins_share_one_out_group(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                sh.out(m, d, 3)
+                m.next = "B"
+
+            def b():
+                sh.out(m, out, 1)                      # out pins on another group
+                m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(dir_body(states), "`out pins` drives more than one pin group")
+
+    def test_out_pindirs_cannot_share_a_state_with_another_operation(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                sh.out(m, d, 3)
+                m.d.sync += x.eq(1)
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(dir_body(states), "statements on the shifter registers|needs two PIO instructions")
+
+    def test_a_state_that_stalls_needs_the_with_form_for_out_pindirs_with_autopull(self):
+        def states(m, sh, bus, d, aux, da, out, inp, x):
+            def a():
+                sh.out(m, d, 3)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(dir_body(states, autopull=True), "this helper call can stall")
+
+    def test_pc_and_exec_stay_refused(self):
+        m, sh = shifter_for_misuse(RP2350PioPlatform())
+        for dest in ("pc", "exec"):
+            with self.assertRaises(ValueError):
+                sh.out(m, dest, 4)
+            with self.assertRaises(ValueError):
+                sh.mov(m, dest, "x")
+
+    def test_a_group_with_a_register_must_fit_the_gpio_window(self):
+        def body(m, pl):
+            pl.add_resources([Resource("far", 0, Pins("40", dir="io"))])
+            far = pl.buffer(m, "io", "far", 0)
+            pl.directions(far)
+            out = pl.buffer(m, "o", "gpio", 2)
+            fsm_states(m, [("A", lambda: (m.d.sync.__iadd__(out.o.eq(1)), setattr(m, "next", "A")))])
+        self.refuse(body, "do not fit one 32-GPIO window", chip=PLATFORMS["rp2350b"])

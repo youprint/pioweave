@@ -126,6 +126,87 @@ class ProjectFileTests(support.TestCase):
             with self.assertRaisesRegex(PioProjectError, "cannot configure `mov"):
                 pl.build(design, example, str(self.tmp_path / example), project="micropython")
 
+    def test_pin_directions_reach_the_generated_files(self):
+        out = build(self.tmp_path, "open_drain", "pico-c")
+        toml, main = read(out / "bitweave.toml"), read(out / "main.c")
+        self.assertIn("dirs = 0", toml)
+        self.assertRegex(toml, r"\[pio\.open_drain\.sim\.expect_dirs\][^\n]*\n0 = \"[01]{60}\"")
+        self.assertIn("pio_sm_set_consecutive_pindirs(pio, sm, 0, 1, false);", main)           # initial direction: input
+        self.assertNotIn("pio_sm_set_consecutive_pindirs(pio, sm, 0, 1, true);", main)
+        self.assertIn("set pindirs, 1 [2]", read(out / "open_drain.pio"))
+        toml2, main2 = (read(build(self.tmp_path / "b", "bus_turnaround", "pico-c") / f) for f in ("bitweave.toml", "main.c"))
+        self.assertIn("[pio.bus_turnaround.sim.expect_dirs]", toml2)
+        self.assertEqual(main2.count("pio_sm_set_consecutive_pindirs(pio, sm, 4, 4, false);"), 1)          # the OUT and IN group is one bidirectional bus
+        self.assertNotIn("pio_sm_set_consecutive_pindirs(pio, sm, 4, 1, false)", main2)                      # not once more as a plain input
+        self.assertIn("sm_config_set_out_pins(&c, 4, 4)", main2)
+        self.assertNotIn("expect_dirs", read(build(self.tmp_path / "s", "square_wave", "pio") / "bitweave.toml"))
+
+    def _dir_design(self, init):
+        from amaranth.build import Pins, Resource
+        from amaranth.hdl import Module
+
+        from pioweave import PioDesign
+
+        class Bus(PioDesign):
+            def elaborate(self, platform):
+                m = Module()
+                platform.add_resources([Resource("bus", 0, Pins("4 5 6", dir="io"))])
+                bus = platform.buffer(m, "io", "bus", 0)
+                d = platform.directions(bus, init=init)
+                with m.FSM():
+                    with m.State("A"):
+                        m.d.sync += d.eq(2)
+                        m.next = "B"
+                    with m.State("B"):
+                        m.d.sync += d.eq(5)
+                        m.next = "A"
+                return m
+        return lambda: (Bus(), PLATFORMS["rp2040"]())
+
+    def test_a_partly_output_group_gets_one_direction_call_per_run(self):
+        factory = self._dir_design(0b101)
+        design, pl = factory()
+        pl.build(design, "bus", str(self.tmp_path / "c"), project="pico-c", sim=SimOptions(factory=factory, cycles=8, stim={4: "0110", 5: "1010", 6: "0011"}))
+        main, toml = read(self.tmp_path / "c" / "main.c"), read(self.tmp_path / "c" / "bitweave.toml")
+        want = ["pio_sm_set_consecutive_pindirs(pio, sm, 4, 1, true)", "pio_sm_set_consecutive_pindirs(pio, sm, 5, 1, false)", "pio_sm_set_consecutive_pindirs(pio, sm, 6, 1, true)"]
+        self.assertEqual([main.index(w) for w in want], sorted(main.index(w) for w in want))
+        self.assertIn("dirs = %d" % (0b101 << 4), toml)
+        dirs = toml.split("expect_dirs]")[1]
+        self.assertTrue('4 = "01010101"' in dirs and '5 = "10101010"' in dirs, dirs)        # the register after each cycle: 2 (0b010), 5 (0b101), 2, ...
+
+    @unittest.skipIf(find_pioasm() is None, reason="pioasm not found (set PIOASM)")
+    def test_micropython_marks_input_pins_and_refuses_side_set_directions(self):
+        factory = self._dir_design(0b101)
+        design, pl = factory()
+        pl.build(design, "bus", str(self.tmp_path / "m"), project="micropython", sim=SimOptions(factory=factory, cycles=8))
+        self.assertIn("set_init=(rp2.PIO.OUT_LOW, rp2.PIO.IN_LOW, rp2.PIO.OUT_LOW)", read(self.tmp_path / "m" / "bus_pio.py"))
+        from amaranth.build import Pins, Resource
+        from amaranth.hdl import Module
+
+        from pioweave import PioDesign
+
+        class SideDirs(PioDesign):
+            def elaborate(self, platform):
+                m = Module()
+                platform.add_resources([Resource("sd", 0, Pins("8", dir="io"))])
+                sd = platform.buffer(m, "io", "sd", 0)
+                d = platform.directions(sd)
+                x = platform.scratch("x")
+                with m.FSM():
+                    with m.State("A"):
+                        m.d.sync += [d.eq(1), x.eq(3)]            # side-set pindirs
+                        m.next = "B"
+                    with m.State("B"):
+                        m.d.sync += d.eq(0)
+                        m.next = "A"
+                return m
+        pl2 = PLATFORMS["rp2040"]()
+        with self.assertRaisesRegex(PioProjectError, "side-set that writes pin directions"):
+            pl2.build(SideDirs(), "sd", str(self.tmp_path / "sd"), project="micropython")
+        pl3 = PLATFORMS["rp2040"]()
+        pl3.build(SideDirs(), "sd", str(self.tmp_path / "sd3"), project="pico-c")
+        self.assertIn(".side_set 1 opt pindirs", read(self.tmp_path / "sd3" / "sd.pio"))
+
     def test_fifo_join_and_wait_pin_reach_the_generated_files(self):
         out = build(self.tmp_path, "tx_join", "pico-c")
         toml, main = read(out / "bitweave.toml"), read(out / "main.c")
@@ -210,7 +291,7 @@ class BitweaveRunTests(support.TestCase):
     @needs_tools
     @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
                         or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
-    @support.parametrize("example", ["clocked_bits", "pin_branch", "high_pins", "spi_master", "osre_loop", "irq_handshake", "tx_join", "pin_gate"])
+    @support.parametrize("example", ["clocked_bits", "pin_branch", "high_pins", "spi_master", "osre_loop", "irq_handshake", "tx_join", "pin_gate", "open_drain", "bus_turnaround"])
     def test_generated_c_project_builds_with_the_pico_sdk(self, example):
         out = build(self.tmp_path, example, "pico-c", hz=1000000)
         chip = pio_designs.PROGRAMS[example][1]

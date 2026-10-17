@@ -10,7 +10,7 @@ from amaranth.hdl import Module
 from amaranth.lib import wiring
 
 __all__ = [
-    "PioDesign", "SquareWave", "PulseTrain", "ButtonPulse", "ClockedBits", "PinBranch", "HighPins", "UartTx", "UartRx", "ByteSwap", "NoBlockEcho", "SpiMaster", "OsreLoop", "IrqHandshake", "PinGate", "TxJoin", "PROGRAMS", "entry",
+    "PioDesign", "SquareWave", "PulseTrain", "ButtonPulse", "ClockedBits", "PinBranch", "HighPins", "UartTx", "UartRx", "ByteSwap", "NoBlockEcho", "SpiMaster", "OsreLoop", "IrqHandshake", "PinGate", "TxJoin", "OpenDrain", "BusTurnaround", "PROGRAMS", "entry",
 ]
 
 
@@ -476,6 +476,69 @@ class TxJoin(PioDesign):
         return m
 
 
+class OpenDrain(PioDesign):
+    """An open-drain line on GPIO 0 with a pull-up outside (pin directions, design note 2f): the level register stays 0, ``set pindirs, 1`` pulls the line low for three
+    cycles and ``set pindirs, 0`` lets it go; then `wait 1 gpio 0` waits until the line is high (another device may hold it low), and two idle cycles follow.
+    The pad is the output where the pin is an output and the outside world elsewhere; the simulations report the directions too."""
+
+    def elaborate(self, platform):
+        m = Module()
+        line = platform.buffer(m, "io", "gpio", 0)
+        d = platform.directions(line)             # initial direction: input (the line is released)
+        with m.FSM():
+            with m.State("PULL_LOW"):
+                m.d.sync += d.eq(1)               # set pindirs, 1 [2]: the output register is 0, so the line goes low
+                m.next = "HOLD1"
+            with m.State("HOLD1"):
+                m.next = "HOLD2"
+            with m.State("HOLD2"):
+                m.next = "RELEASE"
+            with m.State("RELEASE"):
+                m.d.sync += d.eq(0)               # set pindirs, 0
+                m.next = "WAIT_HIGH"
+            with m.State("WAIT_HIGH"):
+                with m.If(line.i):                # wait 1 gpio 0: the pad, which another device may hold low
+                    m.next = "IDLE1"
+            with m.State("IDLE1"):
+                m.next = "IDLE2"
+            with m.State("IDLE2"):
+                m.next = "PULL_LOW"
+        return m
+
+
+class BusTurnaround(PioDesign):
+    """A four-pin bidirectional bus on GPIO 4 to 7 (RP2350: `mov pindirs`). Each round takes a word from the TX FIFO: its low nibble is driven as the levels (``out pins, 4``), the next
+    nibble selects which pins are outputs (``out pindirs, 4``; the others are inputs), ``in pins, 4`` reads the pad (own output where driven, the outside world elsewhere) and
+    pushes it, and ``mov pindirs, !null`` ... no: ``mov pindirs, null`` releases the bus (all inputs) before the next round."""
+
+    def elaborate(self, platform):
+        m = Module()
+        platform.add_resources([Resource("bus", 0, Pins("4 5 6 7", dir="io"))])
+        bus = platform.buffer(m, "io", "bus", 0)
+        d = platform.directions(bus)
+        sh = platform.shifter(m)
+        with m.FSM():
+            with m.State("PULL"):
+                with sh.pull(m):
+                    m.next = "LEVEL"
+            with m.State("LEVEL"):
+                sh.out(m, bus, 4)                 # out pins, 4
+                m.next = "DIRS"
+            with m.State("DIRS"):
+                sh.out(m, d, 4)                   # out pindirs, 4
+                m.next = "READ"
+            with m.State("READ"):
+                sh.in_(m, bus, 4)                 # in pins, 4: the pad
+                m.next = "PUSH"
+            with m.State("PUSH"):
+                with sh.push(m):
+                    m.next = "RELEASE"
+            with m.State("RELEASE"):
+                sh.mov(m, d, "null")              # mov pindirs, null: all pins are inputs again
+                m.next = "PULL"
+        return m
+
+
 def _uart_frames(bytes_, cycles_per_bit=8, idle=6):
     """A serial line carrying `bytes_` as 8N1 frames, least significant bit first, high when idle."""
     bits = "1" * idle
@@ -501,6 +564,8 @@ PROGRAMS = {
     "irq_handshake": (IrqHandshake, "rp2040", {}, 70, {"irq_clear": [(12, 0), (46, 0)], "irq_set": [(5, 1), (30, 1), (52, 1)]}),
     "pin_gate": (PinGate, "rp2040", {4: "0001111000111110000", 5: "0000111111000011111", 6: "0"}, 60),
     "tx_join": (TxJoin, "rp2040", {}, 48, {"tx": [0x1, 0x2, 0x4, 0x8, 0x3, 0x5, 0xA, 0xF, 0xC], "tx_feed": [(30, 0x6)]}),
+    "open_drain": (OpenDrain, "rp2040", {0: "1111111100001111111111110000000011111111"}, 60),
+    "bus_turnaround": (BusTurnaround, "rp2350", {4: "0011010110", 5: "1100101011", 6: "0101100110", 7: "1110001101"}, 48, {"tx": [0x31, 0xA5, 0x0F, 0x72]}),
     "spi_master": (SpiMaster, "rp2040", {4: "0011010111001010" * 8}, 80, {"tx": [0xA5000000, 0x3C000000], "tx_feed": [(50, 0x81000000)]}),
 }
 

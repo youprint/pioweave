@@ -30,10 +30,11 @@ import re
 from amaranth.hdl import Const, Signal
 from amaranth.lib import io
 
-from .builder import (ALWAYS, CLEAR, INVERT, ISR, NONE, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PINS, PIN, REVERSE, SET, STATUS, WAIT, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
+from .builder import (ALWAYS, CLEAR, INVERT, ISR, NONE, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PINDIRS, PINS, PIN, REVERSE, SET, STATUS, WAIT, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
 
 from . import data as D
 from ._compat import Fragment, ast, fsm_state_names
+from .platform import DirPin
 
 __all__ = ["Compiled", "PioCompileError", "compile_design"]
 
@@ -142,6 +143,13 @@ class Compiled:
         The program has a ``pull`` (TX FIFO) or a ``push`` (RX FIFO).
     wrap_target_state : int
         The index of the state the program wraps to (the wrap target).
+    dir_pins : list of pioweave.platform.PinInfo
+        The pin groups with a direction register (``platform.directions``); their directions are a model state (design note 2f).
+    dynamic_gpios : list of int
+        The GPIOs of those groups. Their pad is the design's output where the pin is an output and the outside world elsewhere, so the simulations report the pad levels and
+        the directions of these pins cycle by cycle (``dirs`` in `pioweave.project.amaranth_run`).
+    side_pindirs : bool
+        The side-set of the program writes pin directions (``.side_set N pindirs``) instead of pin levels.
     gpio_base : int
         The GPIO that PIO pin 0 maps to: 0, or 16 on the 48-GPIO parts (RP2350B, RP2354B).
     """
@@ -171,12 +179,37 @@ class Compiled:
         self.uses_tx = False
         self.uses_rx = False
         self.wrap_target_state = 0
+        self.dir_pins = []        # pin groups with a direction register (platform.directions)
+        self.side_pindirs = False
         self.gpio_base = 0        # GPIO that PIO pin 0 maps to: 0, or 16 on the 48-GPIO parts (RP2350B, RP2354B)
 
     @property
     def tx_depth(self):
         """The depth of the TX FIFO: 4, 8 when the FIFOs are joined for TX, 0 when they are joined for RX."""
         return {"none": 4, "tx": 8, "rx": 0}[self.fifo_join]
+
+    @property
+    def dynamic_gpios(self):
+        return sorted(g for p in self.dir_pins for g in p.gpios)
+
+    def dirs_init(self):
+        """The initial pin directions the host configures, as a mask over the PIO's own pin numbers (fixed outputs 1, fixed inputs 0, a group with a direction register: its init).
+
+        Returns
+        -------
+        int
+            The mask (bit ``gpio - gpio_base``).
+        """
+        dynamic = set(self.dynamic_gpios)
+        mask = 0
+        for g in self.output_gpios:
+            if g not in dynamic:
+                mask |= 1 << self.pin(g)
+        for p in self.dir_pins:
+            for k, g in enumerate(p.gpios):
+                if (p.dirs_init >> k) & 1:
+                    mask |= 1 << self.pin(g)
+        return mask
 
     def pin(self, gpio):
         """The PIO's own number of a real GPIO (relative to the GPIO base).
@@ -209,10 +242,7 @@ class Compiled:
             c["sideset_base"] = self.pin(self.side_pin.gpios[0])
         if self.jmp_gpio is not None:
             c["jmp_pin"] = self.pin(self.jmp_gpio)
-        mask = 0
-        for g in self.output_gpios:
-            mask |= 1 << self.pin(g)
-        c["dirs"] = mask
+        c["dirs"] = self.dirs_init()
         if self.out_pin:
             c["out_base"], c["out_count"] = self.pin(self.out_pin.gpios[0]), len(self.out_pin.gpios)
         if self.in_pin:
@@ -286,6 +316,8 @@ class Ctx:
         self.reg = {id(s): n for n, s in platform._scratch.items()}
         self.sh = getattr(platform, "_shifter", None)
         self.wait_pins = {}          # id(PinInfo) -> PinInfo of the input groups tested by `wait pin`
+        self.side_pin = None
+        self.side_pindirs = False    # the side-set writes pin directions (set by _dir_roles)
 
     def flag(self, sig):
         """``(operation codes, style)`` when `sig` is a flag of the data path (the TX-ready / RX-space flag of the FIFO model or a flag of `ShiftFlags`), else None.
@@ -501,6 +533,12 @@ def _data_op(effects, ctx, loc):
             _fail("%s: the destination pin is not assigned the shifted bits" % data["name"], loc)
         rest.pop(found[0][0])
         data["pin"] = found[0][1]
+    elif code == D.OUT_PINDIRS or (mov is not None and mov[0] == "pindirs"):
+        found = [(k, ctx.platform.dirs_info(sig)) for k, (sig, rhs) in rest.items() if ctx.platform.dirs_info(sig) is not None and not isinstance(rhs, Const)]
+        if len(found) != 1:
+            _fail("%s: the destination direction register is not assigned the shifted bits" % data["name"], loc)
+        rest.pop(found[0][0])
+        data["pin"] = found[0][1].info
     return data, rest
 
 
@@ -509,6 +547,13 @@ def _split_effects(effects, ctx, loc):
     data, effects = _data_op(effects, ctx, loc)
     pins, regs = {}, []
     for sig, rhs in effects.values():
+        dp = ctx.platform.dirs_info(sig)
+        if dp is not None:
+            v = _const(rhs, loc)
+            if v is None:
+                _fail("the direction register of %s_%s can only be assigned a constant, or the bits of sh.out / sh.mov" % (dp.name, dp.number), loc)
+            pins[id(dp)] = (dp, v & ((1 << len(sig)) - 1))
+            continue
         info = ctx.platform.pin_info(sig)
         if info is not None and sig is info.o:
             v = _const(rhs, loc)
@@ -654,7 +699,8 @@ def _roles(platform, trees, ctx):
     for t in trees:
         for lf in _leaves(t):
             pins, reg, data = _split_effects(lf.effects, ctx, lf.loc)
-            states.append(([info for info, _ in pins.values()], reg is not None or data is not None, isinstance(t, Br)))
+            has_dirs = any(isinstance(info, DirPin) for info, _ in pins.values())          # a pin direction assignment is the operation (or the side-set) of the state
+            states.append(([info for info, _ in pins.values() if not isinstance(info, DirPin)], reg is not None or data is not None or has_dirs, isinstance(t, Br)))
     setp = [p for p in outs if p.role == "set"]
     side = [p for p in outs if p.role == "side"]
     for p in outs:
@@ -689,7 +735,9 @@ def _roles(platform, trees, ctx):
 
 def _build(platform, name, n, names, trees, ctx):
     set_pin, side_pin = _roles(platform, trees, ctx)
+    set_pin, side_pin, side_pindirs = _dir_roles(trees, ctx, set_pin, side_pin)
     ctx.side_pin = side_pin
+    ctx.side_pindirs = side_pindirs
     dataops = [d for t in trees for lf in _leaves(t) for d in [_split_effects(lf.effects, ctx, lf.loc)[2]] if d]
     codes = {d["code"] for d in dataops}
     outs_used = {id(d["pin"]): d["pin"] for d in dataops if d["pin"] is not None}
@@ -705,7 +753,7 @@ def _build(platform, name, n, names, trees, ctx):
     last = trees[-1]
     if isinstance(last, Leaf) and last.nxt is not None and last.nxt != n - 1:
         pins, reg, data = _split_effects(last.effects, ctx, last.loc)
-        has_main = reg is not None or data is not None or any(info is set_pin for info, _ in pins.values())
+        has_main = reg is not None or data is not None or any(info is set_pin or (isinstance(info, DirPin) and info.info is set_pin) for info, _ in pins.values())
         if has_main:
             wrap_t = last.nxt
     ops = [None] * n
@@ -734,6 +782,9 @@ def _build(platform, name, n, names, trees, ctx):
     for p in (set_pin, side_pin, out_pin, in_pin):
         if p is not None:
             used.update(p.gpios)
+    for p in platform._pio_pins:
+        if p.dirs is not None:
+            used.update(p.gpios)
     used.update(op.gpio for op in ops if op.kind == "wait")
     gpio_base = next((b for b in platform.gpio_bases if all(b <= g <= b + 31 for g in used)), None)
     if gpio_base is None:
@@ -757,7 +808,7 @@ def _build(platform, name, n, names, trees, ctx):
             i += 1
     # emit
     try:
-        prog = Program(_ident(name), chip=platform.chip, side_set=side_bits, side_opt=side_bits > 0, emit_version=True)
+        prog = Program(_ident(name), chip=platform.chip, side_set=side_bits, side_opt=side_bits > 0, side_pindirs=side_pindirs, emit_version=True)
         labels = {}
         used = set()
         for i in range(n):
@@ -786,6 +837,8 @@ def _build(platform, name, n, names, trees, ctx):
     c.name, c.chip, c.program = name, platform.chip, prog
     c.states = [(names[i], None if folded[i] else index[i]) for i in range(n)]
     c.set_pin, c.side_pin = set_pin, side_pin
+    c.side_pindirs = side_pindirs
+    c.dir_pins = [p for p in platform._pio_pins if p.dirs is not None]
     c.jmp_gpio = next(iter(jmp_gpios)) if jmp_gpios else None
     c.wrap_target_state = wrap_t
     c.gpio_base = gpio_base
@@ -819,6 +872,7 @@ def _build(platform, name, n, names, trees, ctx):
             c.in_shift = "right" if sh.in_right else "left"
     c.uses_tx = (bool(codes & {D.PULL_BLOCK, D.PULL_NOBLOCK}) or bool(sh is not None and sh.autopull and codes & out_codes)) and c.fifo_join != "rx"
     c.uses_rx = (bool(codes & {D.PUSH_BLOCK, D.PUSH_NOBLOCK}) or bool(sh is not None and sh.autopush and codes & in_codes)) and c.fifo_join != "tx"
+    outs.extend(c.dynamic_gpios)
     c.output_gpios = sorted(set(outs))
     c.input_gpios = sorted({g for p in platform._pio_pins if p.i is not None for g in p.gpios})
     return c
@@ -829,18 +883,55 @@ def _ident(s):
     return s if s and not s[0].isdigit() else "_" + s
 
 
+def _is_side(info, side_pin):
+    """True for the side-set pin group itself, or (side-set pindirs) for its direction register."""
+    return info is side_pin or (isinstance(info, DirPin) and info.info is side_pin)
+
+
 def _side_of(pins, side_pin, loc):
     """Side-set value among the pin assignments (those that are not the `set` operation)."""
     for info, v in pins.values():
-        if info is side_pin:
+        if _is_side(info, side_pin):
             return v
     return None
+
+
+def _dir_roles(trees, ctx, set_pin, side_pin):
+    """Place the assignments to direction registers (design note 2f): one alone in a state is `set pindirs` and needs the SET group to be its pin group; one in a state with
+    another operation or a test is the side-set, and then the side-set of the whole program writes pin directions (`.side_set N pindirs`).
+    Returns (set_pin, side_pin, side_pindirs)."""
+    set_groups, side_groups = {}, {}
+    for t in trees:
+        for lf in _leaves(t):
+            pins, reg, data = _split_effects(lf.effects, ctx, lf.loc)
+            for info, _ in pins.values():
+                if isinstance(info, DirPin):
+                    (side_groups if reg is not None or data is not None or isinstance(t, Br) else set_groups)[id(info.info)] = info.info
+    names = lambda groups: ", ".join("%s_%s" % (g.name, g.number) for g in groups.values())      # noqa: E731
+    if len(set_groups) > 1:
+        _fail("`set pindirs` is used on more than one pin group (%s); PIO has one SET group per state machine" % names(set_groups))
+    if len(side_groups) > 1:
+        _fail("the side-set writes the directions of more than one pin group (%s); PIO has one side-set group per state machine" % names(side_groups))
+    if set_groups:
+        g = next(iter(set_groups.values()))
+        if set_pin is not None and set_pin is not g:
+            _fail("`set pins` drives %s_%s but `set pindirs` changes %s_%s; PIO has one SET group per state machine" % (set_pin.name, set_pin.number, g.name, g.number))
+        set_pin = g
+    side_pindirs = bool(side_groups)
+    if side_groups:
+        g = next(iter(side_groups.values()))
+        if side_pin is not None:
+            _fail("the side-set of one program writes either pin levels (%s_%s) or pin directions (%s_%s), not both" % (side_pin.name, side_pin.number, g.name, g.number))
+        side_pin = g
+    return set_pin, side_pin, side_pindirs
 
 
 def _classify(i, n, tree, wrap_t, names, set_pin, side_pin, ctx, jmp_gpios):
     succ = _succ(i, n, wrap_t)
     if isinstance(tree, Leaf):
         pins, reg, data = _split_effects(tree.effects, ctx, tree.loc)
+        dir_assign = [(info, v) for info, v in pins.values() if isinstance(info, DirPin)]
+        pins = {k: x for k, x in pins.items() if not isinstance(x[0], DirPin)}
         nxt = i if tree.nxt is None else tree.nxt
         set_assign = [(info, v) for info, v in pins.values() if info is set_pin and info is not side_pin]
         both = [(info, v) for info, v in pins.values() if info is set_pin and info is side_pin]
@@ -864,6 +955,17 @@ def _classify(i, n, tree, wrap_t, names, set_pin, side_pin, ctx, jmp_gpios):
             _fail("a state that sets pins and also changes a register needs two PIO instructions; put them in different states (side-set can carry a pin assignment)", tree.loc)
         if len(set_assign) > 1:
             _fail("internal: two set operations", tree.loc)
+        main_dir = None
+        if len(dir_assign) > 1:
+            _fail("a state that changes the directions of two pin groups needs two PIO instructions; put them in different states", tree.loc)
+        if dir_assign:
+            dp, dv = dir_assign[0]
+            if dp.info is set_pin and main_pin is None and reg is None and data is None:
+                main_dir = dv                                      # set pindirs
+            elif dp.info is side_pin and ctx.side_pindirs and side is None:
+                side = dv                                          # the side-set writes pin directions
+            else:
+                _fail("a state that changes the directions of %s_%s and also sets a pin or does another operation needs two PIO instructions; put them in different states" % (dp.name, dp.number), tree.loc)
         if data is not None:
             if main_pin is not None or reg is not None:
                 _fail("a state that does `%s` and also sets a pin or changes a register needs two PIO instructions; put them in different states (side-set can carry a pin assignment)" % data["name"], tree.loc)
@@ -873,6 +975,8 @@ def _classify(i, n, tree, wrap_t, names, set_pin, side_pin, ctx, jmp_gpios):
         if nxt == succ:
             if reg is not None and reg[0] == "dec":
                 return Op("jmp", cond=("x--" if reg[1] == "x" else "y--"), target=succ, side=side, targets=[succ], foldable=False, pure_nop=False)
+            if main_dir is not None:
+                return Op("set_pindirs", value=main_dir, side=side, targets=[], foldable=True, pure_nop=False)
             if main_pin is not None:
                 return Op("set_pins", value=main_pin[1], side=side, targets=[], foldable=True, pure_nop=False)
             if reg is not None and reg[0] == "set":
@@ -880,8 +984,9 @@ def _classify(i, n, tree, wrap_t, names, set_pin, side_pin, ctx, jmp_gpios):
             if reg is not None and reg[0] == "mov":
                 return Op("mov", dst=reg[1], src=reg[2], inv=reg[3], side=side, targets=[], foldable=True, pure_nop=False)
             return Op("nop", side=side, targets=[], foldable=True, pure_nop=(side is None))
-        if main_pin is not None or reg is not None:
-            _fail("a state that changes %s and then jumps to another state needs two PIO instructions; put the jump in its own state" % ("a pin" if main_pin else "a register"), tree.loc)
+        if main_pin is not None or reg is not None or main_dir is not None:
+            _fail("a state that changes %s and then jumps to another state needs two PIO instructions; put the jump in its own state" % (
+                "a pin" if main_pin else "a register" if reg is not None else "pin directions"), tree.loc)
         return Op("jmp", cond="always", target=nxt, side=side, targets=[nxt], foldable=False, pure_nop=False)
     return _classify_branch(i, n, tree, succ, names, set_pin, side_pin, ctx, jmp_gpios)
 
@@ -905,7 +1010,7 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
     tside = _side_of(tpins, side_pin, br.loc)
     eside = _side_of(epins, side_pin, br.loc)
     for info, _ in list(tpins.values()) + list(epins.values()):
-        if info is not side_pin:
+        if not _is_side(info, side_pin):
             _fail("pins that are set inside a test need a PIO instruction of their own; only the side-set pin can change in a state with a test", br.loc)
     if tside != eside:
         _fail("the side-set value differs between the two branches of the test; a PIO instruction applies one value", br.loc)
@@ -994,7 +1099,7 @@ def _can_stall(code, sh):
     return False
 
 
-_OUT_DST = {D.OUT_PINS: "pins", D.OUT_X: "x", D.OUT_Y: "y", D.OUT_NULL: "null", D.OUT_ISR: "isr"}
+_OUT_DST = {D.OUT_PINS: "pins", D.OUT_X: "x", D.OUT_Y: "y", D.OUT_NULL: "null", D.OUT_ISR: "isr", D.OUT_PINDIRS: "pindirs"}
 _IN_SRC = {D.IN_PINS: "pins", D.IN_X: "x", D.IN_Y: "y", D.IN_NULL: "null", D.IN_ISR: "isr", D.IN_OSR: "osr"}
 
 
@@ -1047,7 +1152,7 @@ def _classify_flag(i, succ, br, parts, tn, en, ctx):
     if go_next != succ:
         _fail("a blocking pull / push must continue with the next state (so must any instruction that can stall, such as an out with autopull; a jump needs a state of its own)", br.loc)
     for info, _ in list(go_pins.values()) + list(stay_pins.values()):
-        if info is not ctx.side_pin:
+        if not _is_side(info, ctx.side_pin):
             _fail("pins that are set in a state that waits must be the side-set pin", br.loc)
     if _side_of(go_pins, ctx.side_pin, br.loc) != _side_of(stay_pins, ctx.side_pin, br.loc):
         _fail("the side-set value differs between waiting and completing; assign it before the `with` so it applies in both", br.loc)
@@ -1065,6 +1170,8 @@ def _emit(prog, op, labels, names):
         prog.nop(**kw)
     elif op.kind == "set_pins":
         prog.set(PINS, op.value, **kw)
+    elif op.kind == "set_pindirs":
+        prog.set(PINDIRS, op.value, **kw)
     elif op.kind == "set_reg":
         prog.set(_REG[op.reg], op.value, **kw)
     elif op.kind == "mov":
@@ -1078,7 +1185,7 @@ def _emit(prog, op, labels, names):
     elif op.kind == "push":
         prog.push(block=op.block, iffull=op.cond, **kw)
     elif op.kind == "out":
-        prog.out({"pins": PINS, "x": X, "y": Y, "null": NULL, "isr": ISR}[op.dst], op.n, **kw)
+        prog.out({"pins": PINS, "x": X, "y": Y, "null": NULL, "isr": ISR, "pindirs": PINDIRS}[op.dst], op.n, **kw)
     elif op.kind == "in":
         prog.in_({"pins": PINS, "x": X, "y": Y, "null": NULL, "isr": ISR, "osr": OSR}[op.src], op.n, **kw)
     elif op.kind == "wait_pin":
@@ -1088,7 +1195,7 @@ def _emit(prog, op, labels, names):
     elif op.kind == "wait_irq":
         prog.wait_irq(op.pol, op.flag, rel=op.rel, **kw)
     elif op.kind == "movg":
-        prog.mov({"pins": PINS, "x": X, "y": Y, "isr": ISR, "osr": OSR}[op.dst], {"pins": PINS, "x": X, "y": Y, "null": NULL, "status": STATUS, "isr": ISR, "osr": OSR}[op.src],
+        prog.mov({"pins": PINS, "x": X, "y": Y, "pindirs": PINDIRS, "isr": ISR, "osr": OSR}[op.dst], {"pins": PINS, "x": X, "y": Y, "null": NULL, "status": STATUS, "isr": ISR, "osr": OSR}[op.src],
                  op={"none": NONE, "invert": INVERT, "reverse": REVERSE}[op.mop], **kw)
     else:
         raise PioCompileError("internal: unknown operation %s" % op.kind)

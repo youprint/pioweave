@@ -61,7 +61,9 @@ def _emulate(a):
     print(compiled.program.pio_text())
     for g in compiled.output_gpios:
         print("GPIO %-3d %s" % (g, res.wave(compiled.pin(g))))
-    for g in sorted(stim):
+        if g in compiled.dynamic_gpios:       # a pin of a group with a direction register: the pad above, the direction here
+            print("GPIO %-3d %s   (direction, 1 = output)" % (g, "".join(str((d >> compiled.pin(g)) & 1) for d in res.dirs)))
+    for g in sorted(set(stim) - set(compiled.dynamic_gpios)):
         print("GPIO %-3d %s   (input)" % (g, "".join(stim[g][min(t, len(stim[g]) - 1)] for t in range(cycles))))
     if res.rx or res.rx_left:
         print("received: %s" % ", ".join("0x%08x@%d" % (w, c) for c, w in res.rx))
