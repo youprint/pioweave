@@ -433,18 +433,64 @@ class EmulatorTests(support.TestCase):
         a.run(2)
         self.assertTrue(b.irq == 0b100 and a.irq == 0)
 
+    def pair(self):
+        """Two RP2350 blocks, b the next higher-numbered block of a (a.neighbours[1] is b, b.neighbours[-1] is a)."""
+        a, b = PioBlock(version=1), PioBlock(version=1)
+        a.neighbours[1], b.neighbours[-1] = b, a
+        return a, b
+
+    def test_wait_1_irq_prev_waits_for_the_flag_of_the_lower_block_and_clears_it(self):
+        # RP2350 11.4.7 / 11.4.11: PREV and NEXT select the IRQ flags of the neighbouring PIO blocks; "wait 1 irq" lowers the flag it waited for when it passes
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.wait_irq(1, 3, other="prev")
+        p.set(X, 7)
+        sm = b.sm[0]
+        sm.configure(program=b.load(p)).enable()
+        for _ in range(3):
+            b.step()
+        self.assertEqual((sm.x, a.irq), (0, 0))                # no flag yet: the wait stalls
+        a.irq_force(1 << 3)
+        b.step()                                               # the wait passes, the flag of block a goes down at the end of the cycle
+        b.step()
+        self.assertEqual((sm.x, a.irq, b.irq), (7, 0, 0))
+
+    def test_wait_0_irq_next_passes_on_a_clear_flag_and_leaves_a_raised_one(self):
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.wait_irq(0, 2, other="next")
+        p.set(X, 5)
+        sm = a.sm[0]
+        sm.configure(program=a.load(p)).enable()
+        b.irq_force(1 << 2)
+        for _ in range(3):
+            a.step()
+        self.assertEqual((sm.x, b.irq), (0, 1 << 2))           # stalls while the neighbour's flag is up, does not clear it
+        b.irq_clear(1 << 2)
+        a.step()
+        a.step()
+        self.assertEqual(sm.x, 5)
+
+    def test_irq_clear_prev_lowers_the_flag_of_the_lower_block(self):
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.irq(2, mode=CLEAR, other="prev")
+        a.irq_force(0b100)
+        b.sm[0].configure(program=b.load(p)).enable()
+        b.step()
+        self.assertEqual(a.irq, 0)
+
     def test_empty_instruction_memory_and_reserved_encodings_raise(self):
         block = PioBlock()
         block.sm[0].enable()
         with self.assertRaisesRegex(EmulationError, "empty instruction memory"):
             block.run(1)
-        for word, match in ((0x4080, "IN source"), (0xE0C0, "SET destination"), (0xA0C0 | 0x18, "MOV operation"), (0xA004 | 0x0, None)):
+        for word, match in ((0x4080, "IN source"), (0xE0C0, "SET destination"), (0xA0C0 | 0x18, "MOV operation"), (0xA004, "MOV source 100")):
             b = PioBlock()
             b.mem[0] = word
             b.sm[0].enable()
-            if match:
-                with self.assertRaisesRegex(EmulationError, match):
-                    b.run(1)
+            with self.assertRaisesRegex(EmulationError, match):
+                b.run(1)
 
     def test_version_0_refuses_wait_jmppin_and_mov_pindirs(self):
         for word, match in ((0x20E0, "WAIT source 11"), (0xA060, "MOV PINDIRS")):
