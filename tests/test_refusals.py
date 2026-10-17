@@ -616,7 +616,8 @@ class DataPathRefusalTests(RefusalCase):
         for bad in ("0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
             with self.assertRaisesRegex(UnsupportedAmaranth, "tested with Amaranth"):
                 check_version(bad, allow=False)
-            self.assertIs(check_version(bad, allow=True), False)     # PIOWEAVE_ALLOW_UNTESTED=1 lets it through (reported as untested)
+            with self.assertWarns(UserWarning):                     # the override lets it through with an UntestedAmaranthWarning (audit S-13)
+                self.assertIs(check_version(bad, allow=True), False)     # PIOWEAVE_ALLOW_UNTESTED=1 lets it through (reported as untested)
 
     def test_fsm_state_names_for_both_ways_amaranth_stores_them(self):
         from pioweave._compat import fsm_state_names

@@ -874,7 +874,7 @@ def _build(platform, name, n, names, trees, ctx):
             index[i] = count
             count += 1
     except PioError as e:
-        raise PioCompileError(str(e))
+        raise PioCompileError(str(e)) from e
     c = Compiled()
     c.name, c.chip, c.program = name, platform.chip, prog
     c.states = [(names[i], None if folded[i] else index[i]) for i in range(n)]
