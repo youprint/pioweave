@@ -75,7 +75,7 @@ Each of these raises ``PioCompileError`` naming the Amaranth source line:
 - more than one operation in a state (it would need two cycles: put them in separate states);
 - compound tests (``&``, ``|``), ``Elif`` chains, tests on anything but ``x``, ``y``, an input pin, one bit of an input group (as a wait) or a flag of the data path (the FIFO flags, ``sh.osr_not_empty``), comparisons with constants other than 0, ``x == y`` as a jump condition, a jump on a low pin, a jump on one bit of an input group;
 - pin or register assignments that are not a constant, the other register, its complement, itself minus 1 (or the helper calls of the data path); assignments to parts of a signal;
-- ``m.Switch`` on multi-bit values; a decrement in only one branch; a decrement without the test that needs it;
+- ``m.Switch`` on multi-bit values (a ``Switch`` on one bit with ``Case(1)`` and ``Case(0)``, or ``Case(1)`` and ``Default``, is accepted: it is an if/else); a decrement in only one branch; a decrement without the test that needs it;
 - registers or pins with a non-zero reset value;
 - a helper that can stall written as a plain call (``out`` with autopull, ``in`` with autopush, a blocking ``pull`` / ``push``, ``irq`` ``wait``, ``wait_irq``: use ``with``), and a stalling state that does not continue with the next state;
 - ``jmp !osre`` written as a jump while the OSR is *empty* (PIO jumps while it is not); ``out`` / ``mov`` to ``pc`` or ``exec``, to ``pindirs`` named by the string instead of a direction register, and ``mov pindirs`` on PIO version 0 (``ValueError`` with the reason when the design is written); ``mov`` from pins on PIO version 0;

@@ -115,3 +115,42 @@ class AmaranthDatasheetTests(support.TestCase):
         text = compile_factory(factory).program.pio_text()
         self.assertIn("s_B:\n    nop\n", text, text)
         self.assertEqual(cosim.amaranth_run(factory, 11, {4: "0010000"})["waves"][1], "11000110110")
+
+
+@support.cases
+class SwitchOnOneBitTests(support.TestCase):
+    """COR-42: m.Switch on a one-bit input with Case(1) and Case(0) is one test (an if/else), not two."""
+
+    def words(self, style):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("A"):
+                    m.d.sync += io["side"].o.eq(1)
+                    m.next = "B"
+                with m.State("B"):
+                    if style == "if":
+                        with m.If(io["in"].i):
+                            m.next = "A"
+                        with m.Else():
+                            m.next = "C"
+                    elif style == "case_case":
+                        with m.Switch(io["in"].i):
+                            with m.Case(1):
+                                m.next = "A"
+                            with m.Case(0):
+                                m.next = "C"
+                    elif style == "case_default":
+                        with m.Switch(io["in"].i):
+                            with m.Case(1):
+                                m.next = "A"
+                            with m.Default():
+                                m.next = "C"
+                with m.State("C"):
+                    m.d.sync += io["side"].o.eq(0)
+                    m.next = "A"
+        return compile_factory(data_design(body)).program.pio_text()
+
+    def test_two_cases_are_an_if_else(self):
+        want = self.words("if")
+        self.assertEqual(self.words("case_default"), want)
+        self.assertEqual(self.words("case_case"), want)

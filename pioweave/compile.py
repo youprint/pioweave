@@ -395,6 +395,16 @@ def _norm_cond(part, truth, ctx, loc):
     _fail("this test cannot be done by one PIO instruction (X or Y against 0, X against Y, an input pin)", loc)
 
 
+def _opposite(a, b):
+    """True when test `b` is exactly the negation of test `a` (the two cases of a Switch on one bit): the same pin or register with the opposite truth value."""
+    if a[0] != b[0] or a[0] not in ("pin", "cmp", "osre", "flag", "pinbit"):
+        return False
+    same = lambda x, y: x is y or (isinstance(x, (str, int)) and x == y)       # noqa: E731  (never `==` on Amaranth values: it builds an expression)
+    if a[0] == "cmp":
+        return a[1] != b[1] and all(same(x, y) for x, y in zip(a[2:], b[2:]))
+    return same(a[1], b[1]) and a[3:] == b[3:] and a[2] != b[2]
+
+
 def _case_conds(sw, ctx, loc):
     parts = sw.test.parts if isinstance(sw.test, ast.Concat) else [sw.test]
     if any(len(p) != 1 for p in parts):
@@ -444,6 +454,8 @@ def _exec(stmts, ctx, nxt, effects, loc):
                 default = body
             else:
                 branches.append((cond, body))
+        if default is None and len(branches) == 2 and _opposite(branches[0][0], branches[1][0]):
+            default, branches = branches[1][1], branches[:1]          # Case(1) and Case(0) of one bit: the second case is the else branch of the first
         tree = _exec(list(default) + rest, ctx, nxt, effects, loc) if default is not None else _exec(rest, ctx, nxt, effects, loc)
         for cond, body in reversed(branches):
             tree = Br(cond, _exec(list(body) + rest, ctx, nxt, effects, loc), tree, loc)
