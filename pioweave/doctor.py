@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """`python -m pioweave doctor`: what this Python environment can do. Checks the Python and Amaranth versions against the version gate, the three packages, the
 tools that are optional (pioasm, bitweave, cmake, arm-none-eabi-gcc, picotool, the Pico SDK), and compiles one example as a smoke test. Exit code 0 when the
 essentials work (a missing optional tool is a note, not a failure, unless `--strict`)."""

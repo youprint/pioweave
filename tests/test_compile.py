@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Tests of pioweave/platform.py, pioweave/compile.py and pioweave/designs.py.
 
 The main test compares the Amaranth simulation of a design with the bitweave PIO simulator running the compiled program, pin by pin and cycle by

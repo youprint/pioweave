@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
 from pioweave import RP2040PioPlatform
 
 from .resources import sdk_resources

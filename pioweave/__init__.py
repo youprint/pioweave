@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """pioweave: write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 in Python or in Amaranth.
 
   pioweave.builder   a Python builder for PIO programs, one method per instruction (needs no Amaranth)

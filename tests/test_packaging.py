@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """The build hook pdm_build.py (COR-14): the Documentation URL in the package metadata. `python -m build` builds the wheel from the sdist, so the hook runs a second time on
 metadata that already has the URL; it must not add the version again (the wheel said ".../tree/main/docsmain/docs"). pdm-backend is not needed: the hook's one import is stubbed."""
 import importlib.util
@@ -101,3 +101,23 @@ class TypingMarkerTests(unittest.TestCase):
                     annotated += bool(node.returns or any(a.annotation for a in args))
         if markers or classified:
             self.assertGreaterEqual(annotated, 0.9 * total, "py.typed or the Typing :: Typed classifier without annotations (%d of %d functions)" % (annotated, total))
+
+
+class LicenseLinkTests(unittest.TestCase):
+    def test_every_source_header_points_at_an_existing_license_file(self):
+        # COR-41: 32 of 47 headers named "LICENSE" (the file is LICENSE.txt) and the README link was broken too
+        import glob
+        import re
+        checked = 0
+        for path in glob.glob(os.path.join(ROOT, "pioweave", "**", "*.py"), recursive=True) + glob.glob(os.path.join(ROOT, "tests", "*.py")):
+            with open(path) as fh:
+                first = fh.readline()
+            m = re.search(r"\(see ([^)]*)\)", first)
+            if m:
+                checked += 1
+                self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), m.group(1))), "%s: %s" % (path, first.strip()))
+        self.assertGreater(checked, 30)
+        with open(os.path.join(ROOT, "README.md")) as fh:
+            for target in re.findall(r"\]\(([^)#]+)\)", fh.read()):
+                if not target.startswith("http"):
+                    self.assertTrue(os.path.exists(os.path.join(ROOT, target)), "README link " + target)

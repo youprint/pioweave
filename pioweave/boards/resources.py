@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
 """Helpers that turn the default pins of a Pico SDK board header into named pioweave resources (one resource per pin: pioweave requests plain pin groups)."""
 from amaranth.build import Pins, Resource
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Example PIO programs written in Amaranth, compiled by pioweave.compile for the platforms of pioweave.platform.
 
 Each one is an ordinary Amaranth Elaboratable: one FSM, pins from platform.buffer() (an amaranth.lib.io.Buffer on a requested pin group), scratch registers from platform.scratch(). One FSM state

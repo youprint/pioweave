@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Directed tests of the Amaranth data-path model whose expected values are worked out by hand from the RP2040 datasheet, not taken from the emulator or from bitweave's simulator.
 
 Why they exist (audit COR-06): the Amaranth data path was written "exactly as the emulator", so the many random Amaranth-versus-emulator agreements prove only that the two

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """The only place that touches Amaranth's internals, and the version gate (study: docs/design-notes/amaranth-ir-study.rst).
 
 What the compiler needs from Amaranth, and where it comes from:

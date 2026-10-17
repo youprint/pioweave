@@ -131,4 +131,4 @@ as a generator, and pioweave's tests use the bitweave binary as the reference si
 
 ## Licence
 
-Proprietary, see [LICENSE](LICENSE) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.
+Proprietary, see [LICENSE.txt](LICENSE.txt) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.

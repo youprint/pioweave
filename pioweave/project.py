@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Project writers for the PIO platform: `platform.build(design, name, build_dir, project=KIND, factory=..., ...)`.
 
 KIND (the user picks what kind of project is needed):

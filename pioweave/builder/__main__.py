@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
 """Command line of pioweave.builder, and the generator command for bitweave's PIO flow.
 
     python -m pioweave.builder list

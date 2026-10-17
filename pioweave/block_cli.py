@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """The command line for the example blocks (`pioweave.block_designs.BLOCKS`): ``python -m pioweave list / build / emulate`` call these when the design name is a block.
 
 Kept apart from ``__main__`` so that the single-machine commands stay as they were.

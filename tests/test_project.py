@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Tests of pioweave/project.py: the three project kinds written by platform.build(..., project=KIND).
 
 The generated bitweave.toml is run with the real bitweave and pioasm when they are found (skipped otherwise). The generated Pico SDK C project is
