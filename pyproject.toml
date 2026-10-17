@@ -1,11 +1,14 @@
 [build-system]
-requires = ["pdm-backend>=2.4"]
+requires = ["pdm-backend>=2.4,<3"]
 build-backend = "pdm.backend"
 
 # Project metadata
 
 [tool.pdm.version]
 source = "scm"
+# Outside a git checkout (an exported tree, a zip) there is no tag to read: set PDM_BUILD_SCM_VERSION=X.Y.Z for the build (docs/releasing.rst), otherwise this placeholder is used
+# (with a warning from pdm-backend). A build from the sdist reads the version from its PKG-INFO.
+fallback_version = "0.0.0.dev0+nogit"
 
 [project]
 dynamic = ["version"]
@@ -19,6 +22,7 @@ license-files = ["LICENSE.txt"]
 authors = [{ name = "the project owner" }]
 keywords = ["amaranth", "pio", "pioasm", "rp2040", "rp2350", "raspberry-pi", "boards", "emulator"]
 classifiers = [
+    "Private :: Do Not Upload",     # PyPI refuses an upload with this classifier: the licence is proprietary (docs/releasing.rst)
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",

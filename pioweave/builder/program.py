@@ -24,6 +24,7 @@ Host software only: nothing here runs on a chip or in an FPGA.
         set pins, 0 [1]
     .wrap
 """
+import math
 import re
 from contextlib import contextmanager
 
@@ -125,8 +126,17 @@ def _int(v, lo, hi, what):
     return v
 
 
+def _is_ident(name):
+    """True for a pioasm symbol: ASCII letters, digits and underscore, not starting with a digit (``str.isalnum`` accepts Unicode letters and digits, pioasm does not)."""
+    return isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+
+
 def _pick(table, v, what):
-    if v not in table:
+    try:
+        known = v in table
+    except TypeError:                   # not hashable, for example a list
+        known = False
+    if not known:
         raise PioError("%s %r is not allowed here; use one of: %s" % (what, v, ", ".join(repr(k) for k in table)))
     return table[v]
 
@@ -208,8 +218,8 @@ class Program:
     """
 
     def __init__(self, name, chip="rp2040", side_set=0, side_opt=False, side_pindirs=False, origin=None, emit_version=True):
-        if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
-            raise PioError("program name %r must be alphanumeric/underscore and not start with a digit" % (name,))
+        if not _is_ident(name):
+            raise PioError("program name %r must be ASCII letters, digits and underscore and not start with a digit" % (name,))
         if chip not in CHIP_VERSION:
             raise PioError("chip %r: use rp2040, rp2350, rp2350a, rp2350b, rp2354, rp2354a or rp2354b" % (chip,))
         self.name, self.chip, self.version = name, chip, CHIP_VERSION[chip]
@@ -243,16 +253,16 @@ class Program:
         Parameters
         ----------
         divider : int or float
-            A positive number.
+            A finite number from 1 to 65535 (the range pioasm accepts).
 
         Raises
         ------
         PioError
-            If an instruction was already added, or `divider` is not a positive number.
+            If an instruction was already added, or `divider` is not a finite number from 1 to 65535.
         """
         self._before_code("clock_divider")
-        if not isinstance(divider, (int, float)) or isinstance(divider, bool) or divider <= 0:
-            raise PioError("clock divider must be a positive number")
+        if not isinstance(divider, (int, float)) or isinstance(divider, bool) or (isinstance(divider, float) and not math.isfinite(divider)) or not 1 <= divider <= 65535:
+            raise PioError("clock divider must be a number from 1 to 65535 (pioasm refuses anything else), not %r" % (divider,))
         self.clock_div = divider
 
     def fifo(self, config):
@@ -392,8 +402,8 @@ class Program:
         PioError
             If the symbol or the value is not valid.
         """
-        if not symbol or not symbol.replace("_", "a").isalnum() or symbol[0].isdigit():
-            raise PioError("symbol %r must be alphanumeric/underscore" % (symbol,))
+        if not _is_ident(symbol):
+            raise PioError("symbol %r must be ASCII letters, digits and underscore and not start with a digit" % (symbol,))
         self.defines.append((symbol, _int(value, -(1 << 31), (1 << 32) - 1, "define value"), bool(public)))
 
     # ---- structure
@@ -415,8 +425,8 @@ class Program:
         PioError
             If the name is not valid or already defined.
         """
-        if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
-            raise PioError("label %r must be alphanumeric/underscore and not start with a digit" % (name,))
+        if not _is_ident(name):
+            raise PioError("label %r must be ASCII letters, digits and underscore and not start with a digit" % (name,))
         if name in self._label_names:
             raise PioError("label %r is defined twice" % name)
         self._label_names.add(name)

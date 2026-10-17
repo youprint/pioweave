@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
 
 name: CI
+
+# The token can only read the repository (audit S-18); nothing here writes to it.
+permissions:
+  contents: read
+
 jobs:
 
   test:
@@ -13,7 +18,8 @@ jobs:
         python-version:
         - '3.9'
         - '3.12'
-        # this version range needs to be synchronized with the one in pyproject.toml and pioweave/_compat.py
+        - '3.14'
+        # this version range needs to be synchronized with the one in pyproject.toml and pioweave/_gate.py
         amaranth-version:
         - '0.5.0'
         - '0.5.1'
@@ -25,11 +31,12 @@ jobs:
     name: 'test (${{ matrix.python-version }}, Amaranth ${{ matrix.amaranth-version }})'
     steps:
       - name: Check out source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0, commit read with `gh api repos/actions/checkout/tags` on 2026-10-17
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0, commit read with `gh api repos/actions/setup-python/tags` on 2026-10-17
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install Amaranth release
@@ -37,6 +44,8 @@ jobs:
         run: |
           pip install 'amaranth==${{ matrix.amaranth-version }}'
       - name: Install Amaranth from git
+        # deliberately the moving HEAD: this row exists to show early that a new Amaranth breaks the compiler; the tested commit is
+        # TESTED_DEV in pioweave/_gate.py
         if: ${{ matrix.amaranth-version == 'git' }}
         run: |
           pip install git+https://github.com/amaranth-lang/amaranth.git
@@ -48,7 +57,7 @@ jobs:
         # (the git version of Amaranth is not one the version gate accepts unless it is the tested commit, hence the override)
         env:
           PIOWEAVE_ALLOW_UNTESTED: ${{ matrix.amaranth-version == 'git' && '1' || '0' }}
-          PYTHONWARNINGS: error
+          PYTHONWARNINGS: ${{ matrix.amaranth-version == 'git' && 'default' || 'error' }}      # the override warns (UntestedAmaranthWarning), which 'error' would raise
         run: |
           python -m unittest discover -t . -s tests -v
 
@@ -56,16 +65,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0, commit read with `gh api repos/actions/checkout/tags` on 2026-10-17
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0, commit read with `gh api repos/actions/setup-python/tags` on 2026-10-17
         with:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          pip install 'amaranth>=0.5,<0.6' sphinx sphinx-rtd-theme
+          pip install 'amaranth>=0.5,<0.6' 'sphinx==9.1.0' 'sphinx-rtd-theme==3.1.0'
           pip install --no-deps -e .
       - name: Build the documentation
         run: |

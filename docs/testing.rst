@@ -26,6 +26,9 @@ What the tests prove
    * - ``tests/test_emulator.py``, ``tests/test_emulator_datasheet.py``, ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``, ``tests/test_emulator_amaranth.py``, ``tests/test_emulator_differential.py``
      - the emulator: directed tests (facts cited from the datasheets), the ``emulate`` API, behaviours of another emulator worked out fresh, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs and on extra families (EXEC, IRQ, joins, thresholds, pin directions); see :doc:`emulator <emulator>`; a hardware test plan is in :doc:`hardware-testing` (nothing has run on a chip)
      - the differential one needs ``bitweave`` and ``pioasm``
+   * - ``tests/test_security.py``
+     - the findings of the security audit: names and values that would escape the build directory or change the generated files, clean errors and exit status 2 on the command line, limits on cycles and input size, ``emulator.check`` on malformed JSON, the version gate and ``scripts/matrix.sh``, pathological designs, the builder's claims, the emulator's range checks, ``pioasm`` failures, the workflow file, packaging
+     -
    * - ``tests/test_refusals.py``
      - everything the compiler must refuse, with the reason; the version gate; the FSM state-name lookup
      - nothing
