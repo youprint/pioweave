@@ -67,9 +67,9 @@ s_BIT:
 Early (version 0.1.0). Everything below was checked in simulation and against the real `pioasm`; **nothing has run on a chip yet**, and the generated MicroPython code has not run on a device.
 
 - The builder's own encoder agrees with `pioasm` on 10,681 instruction words in 351 programs.
-- 450 random Amaranth designs without and 250 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all ten example designs; the Python emulator agrees with the Amaranth simulation on the same designs and with bitweave's simulator, cycle by cycle, on random programs.
+- 450 random Amaranth designs without and 340 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all fifteen example designs; the data-path designs use, in half of the seeds, autopull and autopush with thresholds, `pull ifempty`, `push iffull`, `mov` with the OSR, ISR, pins and status, `in isr/osr`, `out isr`, `jmp !osre`, IRQ flags with host events (compared after every cycle), `wait pin` and joined FIFOs. The Python emulator agrees with the Amaranth simulation on 600 of those designs and with bitweave's simulator, cycle by cycle, on random programs.
 - The whole test suite (166 tests, with real Pico SDK builds of generated C projects) passes on Amaranth 0.5.1, 0.5.10 and the 0.6 development version 0.6.0.dev140; a quick suite passes on every 0.5.x.
-- Not built yet in the Amaranth front end: autopull and autopush, `mov` with the OSR or ISR, `irq`, joined FIFOs and several state machines (the Python builder has all instructions).
+- Not built yet in the Amaranth front end: `out` / `mov` to `pindirs`, `pc` and `exec` (refused with the reason: the model has no pin direction state, and a computed jump or an executed data word is not an FSM state), `irq prev` / `next`, the RP2350 joins that turn the RX FIFO into registers, and several state machines (the Python builder has all instructions).
 
 ## Install
 

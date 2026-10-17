@@ -35,7 +35,7 @@ Supported versions
    * - 0.5.1, 0.5.10
      - the whole test suite passes (166 tests, with real Pico SDK builds)
    * - 0.5.0, 0.5.2 to 0.5.9
-     - the quick suite passes (72 tests plus the instruction words of all ten example designs)
+     - the quick suite passes (106 tests plus the instruction words of all fifteen example designs)
    * - 0.6.0.dev140 (GitHub main, commit ``90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7``)
      - the whole suite passes
    * - any other version
@@ -43,7 +43,7 @@ Supported versions
 
 There is **no 0.6 beta release**: PyPI has no pre-release and the newest upstream tag is ``v0.6.0.dev0``. The 0.6 development version is a moving target; a later commit may break the compiler, and one run of ``scripts/matrix.sh`` on that commit shows it.
 
-The programs a design compiles to are identical on all of these versions: ``tests/example_programs.json`` holds the instruction words and the simulator configuration of the ten example designs, and a test compares them.
+The programs a design compiles to are identical on all of these versions: ``tests/example_programs.json`` holds the instruction words and the simulator configuration of the fifteen example designs, and a test compares them.
 
 The version gate
 ----------------

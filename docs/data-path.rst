@@ -70,20 +70,6 @@ Rules that follow from the instructions:
 
 ``out pindirs``, ``out pc``, ``out exec`` and the same three destinations of ``mov`` are not supported; the helpers raise ``ValueError`` with the reason when the design is written (the model has no pin direction state; ``pc`` and ``exec`` would be jumps and instructions taken from data, which an FSM state cannot express). ``mov x, pins`` is for PIO version 1 only: the program masks the input to the width of the pin group (``in_count``), while PIO version 0 would also read the neighbouring pins, which the model cannot reproduce.
 
-Joined FIFOs and ``wait pin``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``platform.shifter(m, fifo_join="tx")`` joins the two FIFOs into one TX FIFO of eight words (no RX FIFO); ``fifo_join="rx"`` into one RX FIFO of eight words (no TX FIFO). A FIFO that is not there is always full and always empty: with the TX join a ``push block`` (or an autopush ``in``) stalls for ever and ``push noblock`` drops the word; with the RX join a ``pull block`` (or an autopull ``out``) stalls for ever and ``pull noblock`` loads X, and the words the host writes are dropped. More than four words in ``SimOptions(tx=[...])`` are only accepted with the TX join. The RP2350 joins that turn the RX FIFO into registers (``txput``, ``txget``, ``putget``) are not supported. The option goes to ``sm_config_set_fifo_join``, the MicroPython decorator and the bitweave case.
-
-``with m.If(bus.i[k]): m.next = NEXT`` in a state that stays until then, on one bit of an input group of more than one pin, is ``wait 1 pin k`` (``~bus.i[k]`` is ``wait 0 pin k``): the bit is counted from the IN base, the first GPIO of the group, which also becomes ``in_base`` of the state machine. A one-pin input stays ``wait gpio N``. The IN group is one per program: ``in pins``, ``mov ..., pins`` and ``wait pin`` must name the same group. A test of one bit of a group as a *jump* is refused (PIO has no jump on a pin relative to the IN base).
-
-IRQ flags
-~~~~~~~~~
-
-A PIO block has eight IRQ flags, set and cleared by the programs and by the host. The model is for the one state machine of the design (state machine 0): the program's own ``irq`` and ``wait irq`` instructions, and the host, which raises and lowers flags in the simulation with ``SimOptions(irq_set=[(cycle, flag)], irq_clear=[(cycle, flag)])`` (the same entries as in bitweave's cases; clear first, then set, at the start of the cycle, before the instruction). ``irq wait f`` raises flag ``f`` in its first cycle and stalls until the host (or another state machine) has lowered it; ``wait 1 irq f`` stalls until the flag is up and lowers it when it passes; ``wait 0 irq f`` stalls until it is down. The ``rel`` form adds the state machine number: the model is state machine 0, so the flag is the same; the generated C project claims state machine 0 when a program uses ``rel``. ``pioweave.amaranth_run`` returns the flags after every cycle as ``"irq"``. ``platform.shifter(m, status="irq", status_n=N)`` (PIO version 1) lets ``mov x, status`` read flag ``N``.
-
-The generated C project raises a flag for a host event with ``pio->irq_force = 1u << f`` and lowers it with ``pio_interrupt_clear(pio, f)``, in the order of the cycles but not at the exact cycle (the CPU cannot hit it); the MicroPython project notes the events in a comment because MicroPython has no call for them [verify]. ``irq`` with ``prev`` / ``next`` (other PIO blocks) is not supported.
-
 .. _autopull-autopush:
 
 Autopull and autopush
@@ -106,9 +92,59 @@ Because these instructions can stall, write them with ``with``; the body (``m.ne
        with sh.out(m, mosi, 1):              # out pins, 1 side 0 [1]
            m.next = "OUT_HOLD"
 
+The ``spi_master`` example is exactly that; it compiles to two instructions, with the configuration in ``sim_config()``:
+
+.. testcode::
+
+   from pioweave import PLATFORMS, compile_design
+   from pioweave.designs import SpiMaster
+
+   compiled = compile_design(SpiMaster(), PLATFORMS["rp2040"](), "spi")
+   print(compiled.program.pio_text().strip())
+   print(compiled.sim_config()["autopull"], compiled.sim_config()["pull_thresh"])
+
+.. testoutput::
+
+   .program spi
+   .pio_version 0
+   .side_set 1 opt
+       out pins, 1 side 0 [1]
+       in pins, 1 side 1 [1]
+   True 8
+
 A plain ``sh.out(m, ...)`` or ``sh.in_(m, ...)`` with autopull or autopush on is a design error and ``PioCompileError`` names the line (the state would not stall, so the Amaranth simulation and the program would differ). Without autopull or autopush the plain call stays valid, and so does the ``with`` form (its body always runs).
 
 The configuration reaches the generated code: ``sm_config_set_out_shift(&c, right, autopull, pull_thresh)`` and ``sm_config_set_in_shift(&c, right, autopush, push_thresh)`` in C, ``autopull=True``, ``autopush=True``, ``pull_thresh=``, ``push_thresh=`` in the MicroPython decorator [verify the keyword names on a device], and ``autopull``, ``autopush``, ``pull_thresh``, ``push_thresh`` in the bitweave case and in ``Compiled.sim_config()``.
+
+Joined FIFOs and ``wait pin``
+-----------------------------
+
+``platform.shifter(m, fifo_join="tx")`` joins the two FIFOs into one TX FIFO of eight words (no RX FIFO); ``fifo_join="rx"`` into one RX FIFO of eight words (no TX FIFO). A FIFO that is not there is always full and always empty: with the TX join a ``push block`` (or an autopush ``in``) stalls for ever and ``push noblock`` drops the word; with the RX join a ``pull block`` (or an autopull ``out``) stalls for ever and ``pull noblock`` loads X, and the words the host writes are dropped. More than four words in ``SimOptions(tx=[...])`` are only accepted with the TX join. The RP2350 joins that turn the RX FIFO into registers (``txput``, ``txget``, ``putget``) are not supported. The option goes to ``sm_config_set_fifo_join``, the MicroPython decorator and the bitweave case.
+
+``with m.If(bus.i[k]): m.next = NEXT`` in a state that stays until then, on one bit of an input group of more than one pin, is ``wait 1 pin k`` (``~bus.i[k]`` is ``wait 0 pin k``): the bit is counted from the IN base, the first GPIO of the group, which also becomes ``in_base`` of the state machine. A one-pin input stays ``wait gpio N``. The IN group is one per program: ``in pins``, ``mov ..., pins`` and ``wait pin`` must name the same group. A test of one bit of a group as a *jump* is refused (PIO has no jump on a pin relative to the IN base).
+
+IRQ flags
+---------
+
+A PIO block has eight IRQ flags, set and cleared by the programs and by the host. The model is for the one state machine of the design (state machine 0): the program's own ``irq`` and ``wait irq`` instructions, and the host, which raises and lowers flags in the simulation with ``SimOptions(irq_set=[(cycle, flag)], irq_clear=[(cycle, flag)])`` (the same entries as in bitweave's cases; clear first, then set, at the start of the cycle, before the instruction). ``irq wait f`` raises flag ``f`` in its first cycle and stalls until the host (or another state machine) has lowered it; ``wait 1 irq f`` stalls until the flag is up and lowers it when it passes; ``wait 0 irq f`` stalls until it is down. The ``rel`` form adds the state machine number: the model is state machine 0, so the flag is the same; the generated C project claims state machine 0 when a program uses ``rel``. ``pioweave.amaranth_run`` returns the flags after every cycle as ``"irq"``. ``platform.shifter(m, status="irq", status_n=N)`` (PIO version 1) lets ``mov x, status`` read flag ``N``.
+
+The ``irq_handshake`` example waits in ``irq wait 0`` until the host lowers flag 0 in cycle 12; the output goes low one cycle later, and the flags after each cycle are returned with the waveform:
+
+.. testcode::
+
+   from pioweave import PLATFORMS, amaranth_run
+   from pioweave.designs import IrqHandshake
+
+   run = amaranth_run(lambda: (IrqHandshake(), PLATFORMS["rp2040"]()), 20, irq_clear=[(12, 0)])
+   print(run["waves"][0])
+   print(run["irq"])
+
+.. testoutput::
+
+   11111111111110000000
+   [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 4, 4, 4, 4, 4, 4]
+
+The generated C project raises a flag for a host event with ``pio->irq_force = 1u << f`` and lowers it with ``pio_interrupt_clear(pio, f)``, in the order of the cycles but not at the exact cycle (the CPU cannot hit it); the MicroPython project notes the events in a comment because MicroPython has no call for them [verify]. ``irq`` with ``prev`` / ``next`` (other PIO blocks) is not supported.
 
 Examples
 --------
@@ -179,11 +215,11 @@ A receiver, in full:
 How it works, and the limits that follow
 ----------------------------------------
 
-The design needs no combinational logic. A word taken from the TX FIFO or stored in the RX FIFO is recorded by a *toggle register* of the design (``tx_pop``, ``rx_push``, with ``rx_data`` holding the ISR at the push); the FIFO model (``pioweave.data.FifoModel``, an ``amaranth.lib.wiring.Component`` and the only submodule allowed) applies the toggle one clock edge later, while its flags (``tx_ready``, ``rx_space``) and its head already account for the pending word, so the next instruction sees what the PIO shows it.
+The design needs no combinational logic. A word taken from the TX FIFO or stored in the RX FIFO is recorded by a *toggle register* of the design (``tx_pop``, ``rx_push``, with ``rx_data`` holding the ISR at the push); the FIFO model (``pioweave.data.FifoModel``, an ``amaranth.lib.wiring.Component``) applies the toggle one clock edge later, while its flags (``tx_ready``, ``rx_space``) and its head already account for the pending word, so the next instruction sees what the PIO shows it. The flags the other helpers test (``osr_n < pull_thresh`` and the like) are driven by a second submodule, ``ShiftFlags``, and the IRQ flags by a third, ``IrqModel``, created by the first helper that needs it; these three and the pin buffers are the only submodules allowed. With autopull the shifter also adds one statement outside the FSM, the background refill of the OSR, which the compiler recognises.
 
 The compiler reads each helper through two marker registers (``op``, ``arg``) and checks that the statements of a state on the shifter registers are exactly those of the one operation the marker names. A state with two operations, a hand-written assignment to ``sh.osr`` or ``sh.isr``, an operation in a state with a test, and a blocking pull or push that does not continue with the next state are refused with the source line.
 
 The host side in simulation
 ---------------------------
 
-``SimOptions(tx=[...], tx_feed=[(cycle, word)], drain=True)`` (see :doc:`projects <projects>`) describes what the host does: words in the TX FIFO at cycle 0, words written later (the instruction of that cycle sees them, as in bitweave's simulator) and whether the RX FIFO is emptied every cycle. ``pioweave.amaranth_run(factory, cycles, stim, tx, tx_feed, drain)`` returns the pin waveforms, the words pushed with their cycles, and what is left in the FIFOs. The generated bitweave case carries ``tx``, ``tx_feed``, ``rx_drain`` and ``expect_rx``.
+``SimOptions(tx=[...], tx_feed=[(cycle, word)], drain=True)`` (see :doc:`projects <projects>`) describes what the host does: words in the TX FIFO at cycle 0, words written later (the instruction of that cycle sees them, as in bitweave's simulator) and whether the RX FIFO is emptied every cycle. ``irq_set`` and ``irq_clear`` (``[(cycle, flag)]``) are the host's IRQ events. ``pioweave.amaranth_run(factory, cycles, stim, tx, tx_feed, drain, irq_set, irq_clear)`` returns the pin waveforms, the words pushed with their cycles, what is left in the FIFOs and the IRQ flags after every cycle. A draining host takes every pushed word in the cycle it is pushed, so the RX FIFO is never full for the design and ``mov x, status`` with the RX source sees an empty FIFO, as in the emulator. The generated bitweave case carries ``tx``, ``tx_feed``, ``rx_drain``, the IRQ events, ``expect_rx`` and ``expect_irq``.

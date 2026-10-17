@@ -210,7 +210,7 @@ class BitweaveRunTests(support.TestCase):
     @needs_tools
     @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
                         or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
-    @support.parametrize("example", ["clocked_bits", "pin_branch", "high_pins"])
+    @support.parametrize("example", ["clocked_bits", "pin_branch", "high_pins", "spi_master", "osre_loop", "irq_handshake", "tx_join", "pin_gate"])
     def test_generated_c_project_builds_with_the_pico_sdk(self, example):
         out = build(self.tmp_path, example, "pico-c", hz=1000000)
         chip = pio_designs.PROGRAMS[example][1]
@@ -254,3 +254,52 @@ class BitweaveRunTests(support.TestCase):
         members = dict(f.signature.members.items())
         self.assertTrue(members["tx_pop"].flow == wiring.In and members["tx_ready"].flow == wiring.Out)
         self.assertTrue(len(f.tx_head) == 32 and len(f.host_tx_dropped) == 8)
+
+
+class RP2350FeatureProject(support.TestCase):
+    """The configuration calls that exist only for PIO version 1 (STATUS_IRQ_SET, sm_config_set_in_pin_count) in a generated project built with the real SDK."""
+
+    @needs_tools
+    @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
+                        or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
+    def test_irq_status_and_pin_count_build(self):
+        from amaranth.build import Pins, Resource
+        from amaranth.hdl import Module
+
+        from pioweave import PioDesign
+
+        class Version1Features(PioDesign):
+            def elaborate(self, platform):
+                m = Module()
+                platform.add_resources([Resource("bus", 0, Pins("4 5", dir="i"))])
+                out = platform.buffer(m, "o", "gpio", 0)
+                bus = platform.buffer(m, "i", "bus", 0)
+                sh = platform.shifter(m, status="irq", status_n=3)
+                with m.FSM():
+                    with m.State("A"):
+                        sh.irq(m, 3)
+                        m.next = "B"
+                    with m.State("B"):
+                        sh.mov(m, "x", "status")
+                        m.next = "C"
+                    with m.State("C"):
+                        sh.mov(m, "y", bus, "reverse")
+                        m.next = "D"
+                    with m.State("D"):
+                        sh.mov(m, out, "x")
+                        m.next = "E"
+                    with m.State("E"):
+                        sh.irq(m, 3, "clear")
+                        m.next = "A"
+                return m
+        factory = lambda: (Version1Features(), PLATFORMS["rp2350"]())  # noqa: E731
+        design, pl = factory()
+        out = self.tmp_path / "v1"
+        pl.build(design, "v1", str(out), project="pico-c", sim=SimOptions(factory=factory, cycles=30, stim={4: "0110"}))
+        main = read(out / "main.c")
+        self.assertTrue("STATUS_IRQ_SET, 3" in main and "sm_config_set_in_pin_count(&c, 2)" in main)
+        cfg = read(out / "bitweave.toml").replace('[firmware.v1]\n', "").replace('source_dir = "{root}"\nchip = "rp2350"\n', "", 1)
+        (out / "bitweave.toml").write_text(cfg)
+        extra = '\n[firmware.v1]\nsource_dir = "{root}"\nchip = "rp2350"\nsdk_path = "%s"\ntoolchain_dir = "%s"\n' % (SDK, TOOLCHAIN)
+        r, res = run_bitweave(out, "v1", "firmware", extra)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
