@@ -1,0 +1,173 @@
+{
+ "handshake": {
+  "chip": "rp2040",
+  "gpio_base": 0,
+  "machines": {
+   "consumer": {
+    "offset": 6,
+    "sim_config": {
+     "autopush": true,
+     "dirs": 0,
+     "in_base": 0,
+     "in_shift": "left",
+     "push_thresh": 8
+    },
+    "words": [
+     8385,
+     16388,
+     49154
+    ]
+   },
+   "producer": {
+    "offset": 0,
+    "sim_config": {
+     "dirs": 15,
+     "out_base": 0,
+     "out_count": 4,
+     "out_shift": "left"
+    },
+    "words": [
+     32928,
+     57377,
+     24580,
+     49153,
+     8386,
+     66
+    ]
+   }
+  }
+ },
+ "ring": {
+  "chip": "rp2040",
+  "gpio_base": 0,
+  "machines": {
+   "stage0": {
+    "offset": 0,
+    "sim_config": {
+     "dirs": 1,
+     "set_base": 0,
+     "set_count": 1
+    },
+    "words": [
+     8384,
+     57345,
+     57344,
+     49153
+    ]
+   },
+   "stage1": {
+    "offset": 4,
+    "sim_config": {
+     "dirs": 2,
+     "set_base": 1,
+     "set_count": 1
+    },
+    "words": [
+     8385,
+     57601,
+     57344,
+     49154
+    ]
+   },
+   "stage2": {
+    "offset": 8,
+    "sim_config": {
+     "dirs": 4,
+     "set_base": 2,
+     "set_count": 1
+    },
+    "words": [
+     8386,
+     57857,
+     57344,
+     49155
+    ]
+   },
+   "stage3": {
+    "offset": 12,
+    "sim_config": {
+     "dirs": 8,
+     "set_base": 3,
+     "set_count": 1
+    },
+    "words": [
+     8387,
+     58113,
+     57344,
+     49152
+    ]
+   }
+  }
+ },
+ "shared_pin": {
+  "chip": "rp2040",
+  "gpio_base": 0,
+  "machines": {
+   "fast": {
+    "offset": 2,
+    "sim_config": {
+     "dirs": 4,
+     "set_base": 2,
+     "set_count": 1
+    },
+    "words": [
+     57857,
+     57856
+    ]
+   },
+   "slow": {
+    "offset": 0,
+    "sim_config": {
+     "dirs": 4,
+     "set_base": 2,
+     "set_count": 1
+    },
+    "words": [
+     57601,
+     58624
+    ]
+   }
+  }
+ },
+ "uart_baud": {
+  "chip": "rp2040",
+  "gpio_base": 0,
+  "machines": {
+   "baud": {
+    "offset": 0,
+    "sim_config": {
+     "dirs": 2,
+     "sideset_base": 1
+    },
+    "words": [
+     55296,
+     45122,
+     57380,
+     67
+    ]
+   },
+   "tx": {
+    "offset": 4,
+    "sim_config": {
+     "dirs": 1,
+     "out_base": 0,
+     "out_count": 1,
+     "out_shift": "right",
+     "set_base": 0,
+     "set_count": 1,
+     "sideset_base": 0
+    },
+    "words": [
+     39072,
+     8384,
+     61479,
+     8384,
+     24577,
+     67,
+     8384,
+     57345
+    ]
+   }
+  }
+ }
+}

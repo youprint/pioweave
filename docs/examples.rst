@@ -24,6 +24,10 @@ Run an example from the repository root (or after ``pip install -e .``, from any
      - an 8N1 UART transmitter and receiver, 8 cycles per bit, on the Pico's ``uart_tx`` and ``uart_rx`` pins; the transmitter's pin waveform is fed to the receiver in the emulator and the bytes must come back
      - Amaranth FSM, data path (``platform.shifter``)
      - ``python examples/uart/uart.py --out build/uart``
+   * - ``examples/block``
+     - two state machines in one block: a baud generator raises an IRQ flag every 8 cycles and a UART transmitter waits for it before every bit; the block is simulated in Amaranth and in the emulator, and the frame is decoded from the pin waveform
+     - Amaranth FSMs, ``pioweave.block``
+     - ``python examples/block/block.py --out build/block``
    * - ``examples/ws2812``
      - the serial waveform of WS2812-style LEDs: 10 cycles per bit, high for 7 (one) or 2 (zero), 24 bits taken by autopull; the waveform is decoded back into the bits
      - **builder**, because the front end refuses a jump whose two branches have different side-set values

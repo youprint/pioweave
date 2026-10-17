@@ -18,6 +18,7 @@ SCRIPTS = [
     ("blink", "blink.py", ["--board", "waveshare"], ["blink.pio"]),
     ("uart", "uart.py", [], ["tx/uart_tx.pio", "rx/uart_rx.pio"]),
     ("ws2812", "ws2812.py", [], ["ws2812.pio"]),
+    ("block", "block.py", [], ["uart_baud.pio", "main.c", "bitweave.toml"]),
     ("square", "square.py", [], ["square.pio"]),
     ("square", "square.py", ["--high", "20", "--low", "12", "--chip", "rp2350"], ["square.pio"]),
 ]
