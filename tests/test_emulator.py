@@ -484,3 +484,69 @@ class EmulatorTests(support.TestCase):
         r = run_case(p, 6, set_base=0, set_count=1, dirs=1, record=True)
         v = to_vcd(r.trace, [0])
         self.assertTrue("$var wire 1 ! pin0 $end" in v and "#0" in v and "1!" in v and "0!" in v)
+
+
+@support.cases
+class RestartTests(support.TestCase):
+    """COR-01: SM_RESTART. Expected values from the RP2040 datasheet, CTRL register field SM_RESTART (p.372) and 3.5.4 (p.316), not from the code under test: a restart clears the input
+    and output shift counters, the contents of the ISR, the delay counter, the waiting-on-IRQ state, a stalled forced or EXEC instruction and OUT_STICKY pin writes; it does not
+    affect the program counter, the contents of the OSR or the X and Y registers. Power-on values of X and Y are not given by the datasheet (the model starts them at 0)."""
+
+    def machine(self):
+        b = PioBlock()
+        return b, b.sm[0]
+
+    def test_restart_leaves_x_y_osr_and_pc_alone(self):
+        b, sm = self.machine()
+        sm.x, sm.y, sm.osr, sm.pc = 5, 6, 0xDEAD, 3
+        sm.restart()
+        self.assertEqual((sm.x, sm.y, sm.osr, sm.pc), (5, 6, 0xDEAD, 3))
+
+    def test_restart_clears_the_isr_the_shift_counters_and_the_delay(self):
+        b, sm = self.machine()
+        sm.isr, sm.isr_count, sm.osr_count, sm.delay_left = 0xFFFF, 16, 7, 4
+        sm.restart()
+        self.assertEqual((sm.isr, sm.isr_count, sm.osr_count, sm.delay_left), (0, 0, 32, 0))
+
+    def test_restart_does_not_touch_the_fifos_or_the_enable(self):
+        b, sm = self.machine()
+        sm.put(7)
+        sm.enable()
+        sm.restart()
+        self.assertTrue(sm.enabled and len(sm.tx) == 1)
+
+    def test_restart_clears_a_stalled_forced_instruction(self):
+        b, sm = self.machine()
+        sm.force(0x80A0)                                                   # pull block on an empty TX FIFO: stalls
+        sm.enable()
+        for _ in range(3):
+            b.step()
+        self.assertIsNotNone(sm.cur_forced)
+        sm.restart()
+        self.assertIsNone(sm.cur_forced)
+        self.assertIsNone(sm.exec_word)
+
+    def test_reset_is_the_power_on_state_and_restart_after_use_keeps_x(self):
+        b, sm = self.machine()
+        sm.x = 9
+        sm.reset()
+        self.assertEqual((sm.x, sm.y, sm.isr, sm.osr, sm.pc, sm.osr_count, sm.enabled), (0, 0, 0, 0, 0, 32, False))
+
+    def test_a_forced_instruction_that_completes_runs_before_a_pending_executee(self):
+        # COR-12: documents the model (the datasheet, RP2040 3.5.7 p.344 CAUTION, only says that a forced instruction that STALLS overwrites the executee)
+        p = prog()
+        p.pull()
+        p.out(EXEC, 16)
+        p.nop()
+        b = PioBlock()
+        sm = b.sm[0]
+        sm.configure(program=b.load(p))
+        sm.put(0xE025)                                   # set x, 5 in the low 16 bits
+        sm.enable()
+        b.step()
+        b.step()                                         # the OUT has latched the executee, which runs next
+        sm.force(0xE029)                                 # set x, 9
+        b.step()
+        self.assertEqual(sm.x, 9)
+        b.step()
+        self.assertEqual(sm.x, 5)

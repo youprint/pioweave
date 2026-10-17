@@ -340,10 +340,7 @@ class BitweaveRunTests(support.TestCase):
 class RP2350FeatureProject(support.TestCase):
     """The configuration calls that exist only for PIO version 1 (STATUS_IRQ_SET, sm_config_set_in_pin_count) in a generated project built with the real SDK."""
 
-    @needs_tools
-    @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
-                        or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
-    def test_irq_status_and_pin_count_build(self):
+    def _build_version1(self):
         from amaranth.build import Pins, Resource
         from amaranth.hdl import Module
 
@@ -378,9 +375,60 @@ class RP2350FeatureProject(support.TestCase):
         out = self.tmp_path / "v1"
         pl.build(design, "v1", str(out), project="pico-c", sim=SimOptions(factory=factory, cycles=30, stim={4: "0110"}))
         main = read(out / "main.c")
+        return out, main
+
+    def test_irq_status_and_pin_count_are_in_the_generated_c(self):
+        # COR-46: this check needs neither the SDK nor a compiler, so it runs in the default run
+        out, main = self._build_version1()
+        self.assertIn("sm_config_set_in_pin_count(&c, 2);", main)
+        self.assertIn("sm_config_set_mov_status(&c, STATUS_IRQ_SET, 3);", main)
+
+    @needs_tools
+    @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
+                        or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
+    def test_irq_status_and_pin_count_build(self):
+        out, main = self._build_version1()
         self.assertTrue("STATUS_IRQ_SET, 3" in main and "sm_config_set_in_pin_count(&c, 2)" in main)
         cfg = read(out / "bitweave.toml").replace('[firmware.v1]\n', "").replace('source_dir = "{root}"\nchip = "rp2350"\n', "", 1)
         (out / "bitweave.toml").write_text(cfg)
         extra = '\n[firmware.v1]\nsource_dir = "{root}"\nchip = "rp2350"\nsdk_path = "%s"\ntoolchain_dir = "%s"\n' % (SDK, TOOLCHAIN)
         r, res = run_bitweave(out, "v1", "firmware", extra)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class ChipStartStateTests(support.TestCase):
+    """COR-01 and COR-02: the generated C and MicroPython must make the chip start like the reference simulation.
+
+    The expectations come from the Pico SDK header (pio_sm_restart: "Not affected: ... the contents of its output shift register, and its X and Y scratch registers") and from
+    RP2040 datasheet 3.5.6.3 p.342 (2-flipflop input synchroniser, bypassed by INPUT_SYNC_BYPASS), not from the code under test.
+    """
+
+    def test_c_project_zeroes_x_y_isr_and_osr_before_pio_sm_init(self):
+        main = read(build(self.tmp_path, "uart_tx", "pico-c") / "main.c")
+        zero = ["pio_sm_exec(pio, sm, pio_encode_set(pio_x, 0));", "pio_sm_exec(pio, sm, pio_encode_set(pio_y, 0));",
+                "pio_sm_exec(pio, sm, pio_encode_mov(pio_isr, pio_null));", "pio_sm_exec(pio, sm, pio_encode_mov(pio_osr, pio_null));"]
+        for line in zero:
+            self.assertIn(line, main)
+        # with the default configuration (no side-set that a forced instruction would drive), then restart so that the shift counters are as after a reset (OSR count 32)
+        self.assertLess(main.index("pio_sm_set_config(pio, sm, &zero_config)"), main.index(zero[0]))
+        self.assertLess(main.index(zero[-1]), main.index("pio_sm_restart(pio, sm);"))
+        self.assertLess(main.index("pio_sm_restart(pio, sm);"), main.index("pio_sm_init(pio, sm, offset, &c);"))
+
+    def test_c_project_sets_the_input_sync_bypass_for_designs_that_read_pins(self):
+        main = read(build(self.tmp_path, "uart_rx", "pico-c") / "main.c")
+        self.assertRegex(main, r"pio_set_input_sync_bypass_with_mask\(pio, 0x[0-9a-f]+u, 0x[0-9a-f]+u\);")
+        import re
+        mask = int(re.search(r"with_mask\(pio, (0x[0-9a-f]+)u, (0x[0-9a-f]+)u\)", main).group(1), 16)
+        cls, chip, stim, cycles, opts = pio_designs.entry("uart_rx")
+        self.assertEqual(mask, sum(1 << g for g in stim), "the bypass covers the stimulus pins of the example")
+
+    def test_c_project_without_inputs_has_no_bypass(self):
+        self.assertNotIn("input_sync_bypass", read(build(self.tmp_path, "square_wave", "pico-c") / "main.c"))
+
+    def test_micropython_zeroes_the_registers_then_restarts(self):
+        if PIOASM is None:
+            self.skipTest("pioasm not found (set PIOASM)")
+        main = read(build(self.tmp_path, "uart_tx", "micropython") / "main.py")
+        for line in ('sm.exec("set(x, 0)")', 'sm.exec("set(y, 0)")', 'sm.exec("mov(isr, null)")', 'sm.exec("mov(osr, null)")', "sm.restart()"):
+            self.assertIn(line, main)
+        self.assertLess(main.index("sm.restart()"), main.index("sm.active(1)"))

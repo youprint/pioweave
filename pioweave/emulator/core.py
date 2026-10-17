@@ -211,16 +211,38 @@ class StateMachine:
 
     # ------------------------------------------------------------------ host side
     def reset(self):
-        """Restart the state machine (SM restart and clock divider restart): registers cleared, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.338: nothing shifted in,
-        nothing left to shift out), FIFOs emptied, clock divider restarted; the PC is not set (use `set_pc`).
+        """Return the state machine to the power-on state of the model: PC, X, Y, ISR and OSR 0, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.316: nothing
+        shifted in, nothing left to shift out), FIFOs emptied, clock divider restarted, everything else cleared, the state machine disabled.
 
-        The state machine is left disabled."""
+        The datasheets do not state a power-on value for X, Y, the ISR or the OSR (they have no reset value in the register list); the model starts them at 0, as the Amaranth
+        reference simulation does, and the generated C and MicroPython projects clear them explicitly. `restart` is the SM_RESTART of the chip and does not do this."""
         self.pc = 0
         self.x = self.y = 0
         self.isr = self.osr = 0
-        self.isr_count, self.osr_count = 0, 32
         self.tx, self.rx = Fifo(4), Fifo(4)
         self.rx_regs = [0, 0, 0, 0]
+        self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
+        self.executed = self.stall_cycles = self.delay_cycles = 0
+        self.rx_lost = self.tx_dropped = 0
+        self.last = ("-", 0, 0)
+        self.restart()
+        self.clkdiv_restart()
+        self._apply_join()
+
+    def restart(self):
+        """The SM_RESTART of the chip (CTRL register, RP2040 p.372, RP2350 p.851-852; `pio_sm_restart` in the Pico SDK).
+
+        Cleared: the input and output shift counters (ISR 0, OSR 32), the contents of the ISR, the delay counter, the waiting-on-IRQ state, any stalled instruction written to
+        SMx_INSTR or run by OUT / MOV EXEC, and any pin write left asserted by OUT_STICKY. Not affected: the program counter, the contents of the OSR, the X and Y registers (the
+        datasheet says so in so many words), the FIFOs, the enable and the clock divider (see `clkdiv_restart`).
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+        """
+        self.isr = 0
+        self.isr_count, self.osr_count = 0, 32
         self.delay_left = 0
         self.side_done = False
         self.in_shifted = False
@@ -230,14 +252,20 @@ class StateMachine:
         self.cur_source = "exec"                          # where the latched instruction came from: "exec" (OUT / MOV EXEC) or "host" (SMx_INSTR)
         self.force_fresh = False                          # a host-forced instruction that has not been tried yet
         self.saved_flags = None
+        self.sticky = {}                                  # OUT_STICKY: the most recent OUT / SET write per target (levels or directions)
+        return self
+
+    def clkdiv_restart(self):
+        """Restart the clock divider (CLKDIV_RESTART; `pio_sm_clkdiv_restart` in the Pico SDK): the next period starts afresh.
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+        """
         self.cd_left = 0                                  # clock divider: system cycles left in the current division period (0 = not started)
         self.cd_total = 0                                 # clock divider: running total of the fractional part, in 1/256
-        self.sticky = {}                                  # OUT_STICKY: the most recent OUT / SET write per target (levels or directions)
-        self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
-        self.executed = self.stall_cycles = self.delay_cycles = 0
-        self.rx_lost = self.tx_dropped = 0
-        self.last = ("-", 0, 0)
-        self._apply_join()
+        return self
 
     def _apply_join(self):
         """FIFO depths (TX, RX): 4 and 4; joined to 8 and 0 or 0 and 8, or 0 and 0 with both join bits (RP2040 3.5.3 p.335: "Setting both FJOIN_RX and FJOIN_TX makes both FIFOs
@@ -358,8 +386,8 @@ class StateMachine:
         """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.344, RP2350 11.5.7 p.826): the instruction executes
         immediately, "ignoring the state machine clock divider" and whether or not the state machine is enabled (it is how the SDK sets a state machine up), its delay cycles
         are ignored, and the program counter does not advance, so the program continues where it left off unless the forced instruction jumps. A forced instruction may stall; it is
-        then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it replaces an OUT / MOV EXEC instruction in
-        flight. Its side-set is applied like any other [verify].
+        then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it shares the latch of an OUT / MOV EXEC instruction (RP2040 3.5.7 p.344 CAUTION: a forced instruction that stalls overwrites the executee in flight). The model runs a forced instruction that completes
+        first and then still runs the pending executee; whether the chip does is not stated in the datasheet [verify on a chip]. Its side-set is applied like any other [verify].
 
         Parameters
         ----------

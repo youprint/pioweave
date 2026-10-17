@@ -31,7 +31,7 @@ from ._compat import Fragment, ast, clock_period, fsm_state_names
 from .compile import PioCompileError, compile_design
 from .data import IrqModel
 from .platform import RP2040PioPlatform
-from .project import PioProjectError, _c_sm_config, _cmake, _toml_case
+from .project import PioProjectError, _c_sm_config, _c_sync_bypass, _cmake, _toml_case
 
 __all__ = ["BlockError", "Machine", "Block", "BlockSim", "BlockCompiled", "IrqHub", "IrqPort", "block_run", "emulate_block", "machine_cases", "MAX_MACHINES", "MEMORY_WORDS"]
 
@@ -879,6 +879,7 @@ def _c_block_main(bc, name, sim):
     lines.append("    PIO pio = pio0;")
     if bc.gpio_base:
         lines.append("    pio_set_gpio_base(pio, %d);     // the programs use GPIO %d to %d; the SDK pin numbers below are real GPIO numbers" % (bc.gpio_base, bc.gpio_base, bc.gpio_base + 31))
+    lines += _c_sync_bypass(bc.compiled)
     for k, (mname, c, off) in enumerate(zip(bc.names, bc.compiled, bc.offsets)):
         lines += ["    {   // state machine %d: %s (%d instructions at offset %d)" % (k, mname, len(c.program.words()), off),
                   "        uint sm = %d;" % k, "        pio_sm_claim(pio, sm);", "        uint offset = %d;" % off, "        pio_add_program_at_offset(pio, &%s_program, offset);" % c.program.name]

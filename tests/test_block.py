@@ -294,6 +294,14 @@ class BlockProjectTests(support.TestCase):
             self.assertIn("pio_sm_set_consecutive_pindirs(pio, 0, %d, 1, true);" % g, tail)
         self.assertLess(main.index("pio_enable_sm_mask_in_sync"), main.rindex("while (true)"))
 
+    def test_pico_c_block_zeroes_every_machine_and_bypasses_the_synchroniser_once(self):
+        # COR-01 / COR-02 for blocks: each machine's scope clears X, Y, ISR and OSR; the bypass is one register of the block, set once before the machines are configured
+        main = read(self.build("handshake", "pico-c") / "main.c")
+        self.assertEqual(main.count("pio_sm_exec(pio, sm, pio_encode_set(pio_x, 0));"), 2)
+        self.assertEqual(main.count("pio_sm_exec(pio, sm, pio_encode_mov(pio_osr, pio_null));"), 2)
+        self.assertEqual(main.count("pio_set_input_sync_bypass_with_mask("), 1)
+        self.assertLess(main.index("pio_set_input_sync_bypass_with_mask("), main.index("uint sm = 0;"))
+
     def test_host_events_and_words_are_written_in_the_order_of_the_cycles(self):
         block, sim = entry("ring")
         sim.tx_feed = {}
