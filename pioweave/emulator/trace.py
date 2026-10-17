@@ -51,9 +51,12 @@ class State:
         (a delay cycle) or ``"idle"`` (the state machine did not run: the clock divider or a disabled state machine).
     delay_left : int
         Delay cycles still to run before the next instruction.
+    next_opcode : int or None
+        The word the state machine would fetch next from the instruction memory (at `pc`); None where the memory is empty.
 
     Examples
     --------
+    >>> from pioweave.emulator import State
     >>> State().osr_count
     32
     >>> State(x=3).replace(x=4).x
@@ -75,6 +78,7 @@ class State:
     opcode: object = None
     kind: str = "none"
     delay_left: int = 0
+    next_opcode: object = None
 
     def replace(self, **changes):
         """A copy with some fields changed.
@@ -112,7 +116,7 @@ def _snapshot(block, sm, loaded, idle=False):
     kind = "idle" if idle else _KINDS[last_kind]
     return State(clock=block.cycle, pc=sm.pc - loaded.offset, x=sm.x, y=sm.y, isr=sm.isr, osr=sm.osr, isr_count=sm.isr_count, osr_count=sm.osr_count, tx=tuple(sm.tx.q),
                  rx=tuple(sm.rx.q), pins=block.pads(), dirs=block.dirs, irq=block.irq, opcode=None if idle or last_kind == "-" else last_word, kind=kind,
-                 delay_left=sm.delay_left)
+                 delay_left=sm.delay_left, next_opcode=block.mem[sm.pc & 31])
 
 
 def emulate(program, *, stop_when=None, cycles=None, per="instruction", initial_state=None, input_source=None, stim=None, tx=(), tx_feed=(), version=None, gpio_base=0,
@@ -154,7 +158,8 @@ def emulate(program, *, stop_when=None, cycles=None, per="instruction", initial_
     max_cycles : int
         Safety limit on the system clock cycles.
     **config :
-        The state machine configuration of `run_case`: ``set_base``, ``set_count``, ``out_base``, ``out_count``, ``sideset_base``, ``in_base``, ``jmp_pin``, ``in_shift``,
+        The wrap range of a word list: ``wrap_target`` and ``wrap_top``, program-relative (a `Program` brings its own; a word list wraps from the last instruction to 0). The
+        state machine configuration of `run_case`: ``set_base``, ``set_count``, ``out_base``, ``out_count``, ``sideset_base``, ``in_base``, ``jmp_pin``, ``in_shift``,
         ``out_shift``, ``autopush``, ``autopull``, ``push_thresh``, ``pull_thresh``, ``fifo_join``, ``status_sel``, ``status_n``, ``clkdiv``, ``x``, ``y``, ``dirs``, ``start_pc``,
         ``side`` and so on.
 
@@ -205,6 +210,7 @@ def emulate(program, *, stop_when=None, cycles=None, per="instruction", initial_
     if version is None:
         version = CHIP_VERSION[program.chip] if hasattr(program, "chip") else 0
     side = config.pop("side", None)
+    wrap_target, wrap_top = config.pop("wrap_target", None), config.pop("wrap_top", None)
     if "sideset_base" in config:
         config["side_base"] = config.pop("sideset_base")
     x, y, dirs, start = config.pop("x", 0), config.pop("y", 0), config.pop("dirs", 0), config.pop("start_pc", 0)
@@ -212,6 +218,10 @@ def emulate(program, *, stop_when=None, cycles=None, per="instruction", initial_
     loaded = block.load(program, side=side)
     sm = block.sm[0]
     sm.configure(program=loaded, **config)
+    if wrap_target is not None:
+        sm.cfg.wrap_bottom = loaded.offset + wrap_target
+    if wrap_top is not None:
+        sm.cfg.wrap_top = loaded.offset + wrap_top
     sm.enable()
     sm.set_pc(loaded.offset + start)
     sm.x, sm.y = x, y

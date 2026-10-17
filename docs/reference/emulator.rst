@@ -15,3 +15,9 @@ Running a test case
 
 .. automodule:: pioweave.emulator.run
    :members:
+
+Unit tests and waveforms
+------------------------
+
+.. automodule:: pioweave.emulator.trace
+   :members: State, emulate, count_cycles, pin_history, waveform_text, plot_waveform

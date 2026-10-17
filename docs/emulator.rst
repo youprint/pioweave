@@ -37,17 +37,21 @@ One ``PioBlock`` has a shared 32-word instruction memory, four state machines, t
    * - instructions
      - all nine, with every source and destination: ``JMP`` (all eight conditions), ``WAIT`` (GPIO, pin, IRQ, and on version 1 JMPPIN), ``IN``, ``OUT`` (including ``PC``, ``ISR``, ``EXEC``, ``PINDIRS``), ``PUSH`` / ``PULL`` (``iffull``, ``ifempty``, block and noblock), ``MOV`` (inversion, bit reversal, all sources and destinations, ``STATUS``), ``IRQ`` (set, clear, wait, relative), ``SET``
    * - timing
-     - one instruction per state machine clock cycle; delays; stalls (a stalled instruction retries every cycle); side-set applied in the first cycle of the instruction, after the instruction's own pin write (so side-set wins); ``OUT EXEC`` / ``MOV EXEC`` / forced instructions run in the next cycle and their delay is the executed instruction's own
+     - one instruction per state machine clock cycle; delays; stalls (a stalled instruction retries every cycle); side-set applied in the first cycle of the instruction, after the instruction's own pin write (so side-set wins); ``OUT EXEC`` / ``MOV EXEC`` run the executee in the next cycle and the executee's own delay applies; a forced instruction runs at once and its delay is ignored
    * - shifters
-     - OSR and ISR with the shift directions, the shift counters (OSR starts empty), autopush and autopull with thresholds, the counter saturating at 32
+     - OSR and ISR with the shift directions, the shift counters (OSR starts empty), autopush and autopull with thresholds, the counters saturating at 32; reset: ISR counter 0, OSR counter 32, both shifts to the right, thresholds 32 (RP2040 Table 383 p.377), ``set_count`` 5 (Table 386 p.378)
    * - FIFOs
-     - 4 words each way; joined (8 words one way) with ``fifo_join="tx"`` or ``"rx"``; on version 1 the RX FIFO as four registers with ``MOV rxfifo[]`` (``rx_put``, ``rx_get``, ``rx_put_get``)
+     - 4 words each way; joined (8 words one way) with ``fifo_join="tx"`` or ``"rx"``, both unavailable with ``"both"``; changing the join flushes both FIFOs (RP2040 3.5.3 p.334-335, Table 383 p.377); on version 1 the RX FIFO as four registers with ``MOV rxfifo[]`` (``rx_put``, ``rx_get``, ``rx_put_get``; RP2350 11.4.8 p.810, 11.4.9 p.811)
    * - IRQ flags
-     - eight flags per block, set and clear from the instructions; a flag that is set and cleared in the same cycle ends up set; ``IRQ PREV`` / ``NEXT`` between linked blocks (``PioBlock.neighbours``) on version 1
+     - eight flags per block, set and clear from the instructions and from the host (``block.irq_clear(mask)``, ``block.irq_force(mask)``); a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.799); ``IRQ PREV`` / ``NEXT`` between linked blocks (``PioBlock.neighbours``) on version 1; ``MOV STATUS`` from a TX or RX level, and on version 1 from a flag of this or a neighbouring block (RP2350 Table 1052 p.857)
    * - pins
-     - output levels and directions per pin; several state machines writing the same pin: the highest-numbered one wins [verify]; inputs from ``set_input()`` / waveforms, through the optional two-flop input synchroniser (``sync_cycles``, default 2 [verify]; 0 bypasses it)
+     - output levels and directions per pin; several state machines writing the same pin: the highest-numbered one wins, separately for levels and directions (RP2040 datasheet 3.5.6.1 p.341-342), and within one state machine the side-set wins over OUT / SET (3.5.1 p.332); inputs from ``set_input()`` / waveforms, through the two-flop input synchroniser (``sync_cycles``, 2 by default, engaged unless the pin's bit in ``block.sync_bypass`` (INPUT_SYNC_BYPASS) is set: 3.5.6.3 p.342, Table 376 p.375; 0 bypasses it for all pins); optional ``loopback="datasheet"`` for the 2 / 4 cycle delay of a state machine reading its own outputs (3.5.6.1 p.342)
    * - clock divider
-     - ``clkdiv`` as a fractional divider (integer and 1/256 steps); the state machine advances in 1 / ``clkdiv`` of the system clock cycles [verify the exact jitter pattern of the hardware]
+     - ``clkdiv`` from 1 to 65536 in steps of 1/256 as a first-order delta-sigma divider: periods of n cycles, one of them n + 1 every time the running total of the fraction wraps (RP2040 3.5.5 p.339-340, Figures 46 and 47). Where the first period starts after enabling is not stated [verify]; a forced instruction ignores the divider
+   * - forced and EXEC instructions
+     - ``OUT EXEC`` / ``MOV EXEC``: the executee runs in the next cycle with its own delay, the delay of the OUT / MOV is ignored, the PC does not advance for the executee (3.4.5.2 p.327, 3.4.8.2 p.329, 3.5.7 p.344). ``sm.force(word)`` (a write to SMx_INSTR): executes at once, whether or not the state machine is enabled and whatever its divider, delay cycles ignored, the PC does not advance unless it is a jump; a stalled one is latched and retried (3.5.7 p.344-345)
+   * - EXECCTRL extras
+     - ``out_sticky``, ``inline_out_en``, ``out_en_sel`` (RP2040 Table 382 p.376); the datasheets give two sentences, so the details are [verify]
    * - PIO version 1
      - ``WAIT JMPPIN``, ``MOV PINDIRS``, ``MOV`` to and from the RX FIFO registers, ``IN`` with a count (``in_count``), ``STATUS`` from an IRQ flag, the GPIO base (0 or 16) for the 48-GPIO parts
    * - errors
@@ -88,6 +92,100 @@ Running a test case
 
 ``run_compiled(compiled, cycles, stim, tx, tx_feed, drain)`` runs a program compiled from an Amaranth design with the configuration the compiler derived (real GPIO numbers for the stimulus). ``to_vcd(trace, pins)`` writes a VCD of recorded pins.
 
+Unit tests and cycle counts: ``emulate()``
+------------------------------------------
+
+``emulate(program, stop_when=..., ...)`` is a generator that yields a ``(before, after)`` pair of frozen ``State`` snapshots for every executed instruction (``per="instruction"``, the default) or for every system clock cycle (``per="cycle"``), the style of a unit test: step, look at the registers, the FIFOs and the pins, stop when a condition holds. A ``State`` has ``clock``, ``pc`` (relative to the program), ``x``, ``y``, ``isr``, ``osr``, ``isr_count``, ``osr_count``, ``tx`` and ``rx`` (tuples), ``pins`` (what is on the pads), ``dirs``, ``irq``, ``opcode`` (the word handled in the step), ``kind`` (``"executed"``, ``"stalled"``, ``"forced"``, ``"delay"`` or ``"idle"``), ``delay_left`` and ``next_opcode``. With ``per="instruction"`` a step ends when the instruction has completed and its delay cycles have run, so ``after.clock - before.clock`` is what the instruction cost, stalls included. The configuration keywords are those of ``run_case``; ``stop_when(state)`` sees the state a step would start from, ``cycles`` and ``max_cycles`` bound the run.
+
+.. testcode::
+
+   from pioweave.builder import Program, X, X_DEC
+   from pioweave.emulator import emulate
+
+   p = Program("count")
+   p.set(X, 2)
+   p.label("loop")
+   p.jmp("loop", when=X_DEC)
+   for before, after in emulate(p, stop_when=lambda s: s.x == 0xFFFFFFFF):
+       print(after.clock, before.x, "->", after.x)
+
+.. testoutput::
+
+   1 0 -> 2
+   2 2 -> 1
+   3 1 -> 0
+   4 0 -> 4294967295
+
+Inputs come from ``input_source(state)`` (called before every system clock cycle, returning the levels the outside world drives) or from ``stim`` waveforms; ``initial_state`` starts from given registers, FIFOs and pins. Built on it:
+
+- ``count_cycles(program, stop_when)``: the system clock cycles until the condition holds.
+- ``pin_history(program, cycles, pins=[...])``: ``{pin: [level after each cycle]}``; ``waveform_text(history)`` prints it as text; ``plot_waveform(history)`` draws it with matplotlib, imported only when called.
+- ``to_vcd(result.trace, pins)`` writes a VCD for GTKWave or Surfer from a ``run_case(..., record=True)`` run.
+
+.. testcode::
+
+   from pioweave.builder import Program, PINS
+   from pioweave.emulator import pin_history, waveform_text
+
+   blink = Program("blink")
+   with blink.wrapped():
+       blink.set(PINS, 1, delay=1)
+       blink.set(PINS, 0, delay=1)
+   print(waveform_text(pin_history(blink, 8, pins=[0], set_base=0, set_count=1, dirs=1), names={0: "led"}))
+
+.. testoutput::
+
+   led |##__##__|
+
+Porting tests from rp2040-pio-emulator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The mapping from the names that project documents (its README and guides) to this package. The behaviour differs in the points listed after the table; see :doc:`design-notes/emulator-comparison` for the full comparison.
+
+.. list-table::
+   :header-rows: 1
+
+   * - rp2040-pio-emulator
+     - pioweave.emulator
+   * - ``emulate(opcodes, stop_when=lambda opcode, state: ...)``
+     - ``emulate(words, stop_when=lambda state: ...)``; the opcode about to run is ``state.next_opcode``
+   * - ``before, after`` per instruction
+     - the same with ``per="instruction"`` (default); ``per="cycle"`` for one pair per system clock cycle
+   * - ``State.clock``
+     - ``State.clock``
+   * - ``program_counter``
+     - ``pc``, relative to the start of the program (it equals the absolute address for a program at offset 0)
+   * - ``pin_values``, ``pin_directions``
+     - ``pins`` (the pads), ``dirs``
+   * - ``transmit_fifo``, ``receive_fifo`` (deques)
+     - ``tx``, ``rx`` (tuples)
+   * - ``input_shift_register``, ``output_shift_register`` (contents and counter)
+     - ``isr``, ``isr_count``, ``osr``, ``osr_count``
+   * - ``x_register``, ``y_register``
+     - ``x``, ``y``
+   * - ``initial_state=State(...)``
+     - ``initial_state=State(...)``
+   * - ``input_source`` (a function of the state or of the clock)
+     - ``input_source(state)``; use ``state.clock`` for the cycle
+   * - ``auto_pull``, ``auto_push``
+     - ``autopull``, ``autopush``
+   * - ``pull_threshold``, ``push_threshold``
+     - ``pull_thresh``, ``push_thresh`` (OSR bits shifted out before a pull; ISR bits shifted in before a push)
+   * - ``shift_isr_right``, ``shift_osr_right``
+     - ``in_shift="right"`` or ``"left"``, ``out_shift``
+   * - ``out_base``, ``out_count``, ``set_base``, ``set_count``, ``jmp_pin``
+     - the same names; the reset value of ``out_count`` is 0 (hardware), so pass ``out_count=32`` where the other project defaults to 32
+   * - ``side_set_base``, ``side_set_count``
+     - ``sideset_base``; the width comes from ``Program(side_set=n, side_opt=...)`` or, for a word list, ``side=(bits, optional, pindirs)``
+   * - ``wrap_target``, ``wrap_top``
+     - the same names for a word list (program-relative); a ``Program`` carries its own
+   * - opcodes from Adafruit's PIOASM
+     - any list of 16-bit words, or a ``pioweave.builder.Program``
+   * - one state machine only
+     - ``emulate`` runs state machine 0 of a block; use ``PioBlock`` for several
+
+Differences to know when porting: the pins are the 32-pin window of the block with the two-flop synchroniser off in ``emulate`` and ``run_case`` (``sync_cycles=0``, as bitweave's simulator) and on in ``PioBlock`` (2); JMP targets of a word list are used as written when the program is loaded at offset 0; undefined programs raise ``EmulationError`` instead of ending the run quietly.
+
 From the command line
 ---------------------
 
@@ -109,11 +207,17 @@ How it was checked
    * - ``tests/test_emulator.py``
      - 41 directed tests of every instruction and feature, with expected values worked out from the datasheet semantics
      - nothing
+   * - ``tests/test_emulator_datasheet.py``
+     - the facts that were [verify] before they were read in the datasheets (reset values, output priority, synchroniser, divider, joins, MOV STATUS, IRQ flags, delay and side-set, EXEC and forced instructions), each test naming the section and page
+     - nothing
+   * - ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``
+     - the ``emulate`` API, and behaviours that another emulator documents (pin ranges that wrap after GPIO 31, thresholds of PUSH IFFULL and PULL IFEMPTY, stalls and delays, several state machines, shift directions), worked out fresh from the datasheets
+     - nothing (matplotlib for one plot test, skipped without it)
    * - ``tests/test_emulator_amaranth.py``
      - every example design and random designs (control flow and data path, all chips) run in the emulator and in the Amaranth simulator must agree pin by pin, cycle by cycle, on the words pushed and the FIFO contents
      - nothing
    * - ``tests/test_emulator_differential.py``
-     - random programs (every instruction form, both PIO versions, random configurations, input waveforms and FIFO traffic) must agree with bitweave's PIO simulator in every cycle on the instruction executed, all registers, the pads, the directions, the IRQ flags, the words received and the FIFO counts; programs that do something undefined must stop in the same cycle
+     - random programs (every instruction form, both PIO versions, random configurations, input waveforms and FIFO traffic) must agree with bitweave's PIO simulator in every cycle on the instruction executed, all registers, the pads, the directions, the IRQ flags, the words received and the FIFO counts; programs that do something undefined must stop in the same cycle. Extra families aim at OUT / MOV EXEC with valid instruction words in the FIFO, IRQ flags and MOV STATUS, the FIFO joins and the RX FIFO registers, autopush and autopull with every threshold, and the pin directions (SET, OUT, MOV and side-set)
      - the ``bitweave`` binary and ``pioasm``
 
-The emulator and bitweave's simulator were written separately from the same datasheets, so the comparison catches slips in either, not a misreading common to both. **Nothing has run on a chip**: items marked [verify] (the priority between state machines writing one pin, the default of the input synchroniser, the clock divider pattern, the reset values of the shift directions) come from the datasheets as recalled and need a check against the documents or a chip. A multi-state-machine program is verified only by the directed tests, not by the differential test (bitweave's simulator runs one state machine).
+The emulator and bitweave's simulator were written separately from the same datasheets, so the comparison catches slips in either, not a misreading common to both. **Nothing has run on a chip**: the hardware test plan is :doc:`hardware-testing` and is a plan only. The facts of this page were read in the RP2040 datasheet (build-date 2025-02-20, build-version 3184e62-clean) and the RP2350 datasheet (Release 8, build date 01/10/2026, build version 80d627281ed5) with printed page numbers; what those documents do not say stays [verify]: where the fractional clock divider starts its first period after enabling, whether a stalled instruction asserts its side-set again on every retry (the datasheet says it takes effect "on the first cycle"; the emulator applies it once), the side-set of a forced instruction, the details of OUT_STICKY and INLINE_OUT_EN, the output-to-input delay of a state machine reading its own pins on the RP2350 (the RP2040 states 2 and 4 cycles), and what a MOV STATUS compare with N above the FIFO depth does (reserved on the RP2350, accepted here). A multi-state-machine program is verified only by the directed tests, not by the differential test (bitweave's simulator runs one state machine and has no forced instructions, clock divider or OUT_STICKY).

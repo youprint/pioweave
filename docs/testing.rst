@@ -23,8 +23,8 @@ What the tests prove
    * - ``tests/test_compile.py``
      - the compiler: the ten example designs, 450 random control-flow designs and 250 random data-path designs run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version
      - the ``bitweave`` binary and ``pioasm``
-   * - ``tests/test_emulator.py``, ``tests/test_emulator_amaranth.py``, ``tests/test_emulator_differential.py``
-     - the emulator: directed tests, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs; see :doc:`emulator <emulator>`
+   * - ``tests/test_emulator.py``, ``tests/test_emulator_datasheet.py``, ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``, ``tests/test_emulator_amaranth.py``, ``tests/test_emulator_differential.py``
+     - the emulator: directed tests (facts cited from the datasheets), the ``emulate`` API, behaviours of another emulator worked out fresh, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs and on extra families (EXEC, IRQ, joins, thresholds, pin directions); see :doc:`emulator <emulator>`; a hardware test plan is in :doc:`hardware-testing` (nothing has run on a chip)
      - the differential one needs ``bitweave`` and ``pioasm``
    * - ``tests/test_refusals.py``
      - everything the compiler must refuse, with the reason; the version gate; the FSM state-name lookup
