@@ -2,7 +2,7 @@
 """Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (design note docs/pio-dsl.md).
 
 A `Program` is built with one method per PIO instruction, in the style of an Amaranth description: statements in program order, names as
-constants, errors raised when the program is built, not when the chip runs it. It produces
+constants, errors raised when the program is built, not when the chip runs it. It produces::
 
   program.pio_text()   pioasm source (assembled by pioasm, which bitweave runs: `bitweave pio NAME` with a `generator`)
   program.words()      the 16-bit instruction words, encoded here from the datasheet tables (RP2040 datasheet chapter 3, RP2350
@@ -11,13 +11,25 @@ constants, errors raised when the program is built, not when the chip runs it. I
 Facts used: the instruction encodings, the directive and instruction syntax of pioasm as printed in the datasheets. No third-party code.
 Host software only: nothing here runs on a chip or in an FPGA.
 
-    p = Program("square", chip="rp2040")
-    with p.wrapped():
-        p.set(PINS, 1, delay=1)
-        p.set(PINS, 0, delay=1)
-    print(p.pio_text())
+    >>> from pioweave.builder import Program, PINS
+    >>> p = Program("square", chip="rp2040")
+    >>> with p.wrapped():
+    ...     p.set(PINS, 1, delay=1)
+    ...     p.set(PINS, 0, delay=1)
+    >>> print(p.pio_text(), end="")
+    .program square
+    .pio_version 0
+    .wrap_target
+        set pins, 1 [1]
+        set pins, 0 [1]
+    .wrap
 """
 from contextlib import contextmanager
+
+__all__ = [
+    "ALWAYS", "CHIP_VERSION", "CLEAR", "EXEC", "INVERT", "ISR", "MEMORY_WORDS", "NONE", "NOT_OSRE", "NOT_X", "NOT_Y", "NULL", "OSR", "PC", "PIN", "PINDIRS", "PINS",
+    "REVERSE", "SET", "STATUS", "WAIT", "X", "X_DEC", "X_NE_Y", "Y", "Y_DEC", "PioError", "Program", "write_pio",
+]
 
 # the RP2354 is an RP2350 with 2 MB of flash in the package; the A (QFN-60, 30 GPIOs) and B (QFN-80, 48 GPIOs) variants differ only in the pinout (RP2350 datasheet, Table 1)
 CHIP_VERSION = {"rp2040": 0, "rp2350": 1, "rp2350a": 1, "rp2350b": 1, "rp2354": 1, "rp2354a": 1, "rp2354b": 1}
@@ -25,7 +37,19 @@ MEMORY_WORDS = 32                                         # shared instruction m
 
 
 class PioError(ValueError):
-    """The program is not valid for the chosen chip."""
+    """The program is not valid for the chosen chip.
+
+    Raised by the `Program` methods when an argument is out of range or not allowed for the chip, and by `Program.pio_text`, `Program.words` and
+    `Program.wrap_range` when the finished program is inconsistent (an undefined label, a jump beyond the end, no instructions). It is a `ValueError`.
+
+    Examples
+    --------
+    >>> from pioweave.builder import Program, PINS
+    >>> Program("p").set(PINS, 32)
+    Traceback (most recent call last):
+      ...
+    pioweave.builder.program.PioError: set value must be an integer from 0 to 31, got 32
+    """
 
 
 class _Name:
@@ -81,7 +105,80 @@ def _pick(table, v, what):
 
 
 class Program:
-    """One PIO program. `chip` is rp2040, rp2350 or rp2354 and decides which instructions and directives are legal."""
+    """One PIO program, written one method call per instruction.
+
+    The chip decides which instructions and directives are legal (PIO version 0 on the RP2040, version 1 on the RP2350 and RP2354). A method that is given
+    an argument the chip or the instruction does not allow raises `PioError` at once; problems that only show when the program is complete (an undefined
+    label, a jump beyond the end) are raised by `pio_text`, `words` and `wrap_range`. Every instruction method takes `side` (the side-set value) and
+    `delay` (the delay cycles); both share five bits with the side-set (RP2040 datasheet chapter 3, RP2350 datasheet chapter 11).
+
+    Parameters
+    ----------
+    name : str
+        The program name (pioasm `.program`): letters, digits and underscores, not starting with a digit.
+    chip : str
+        One of ``rp2040``, ``rp2350``, ``rp2350a``, ``rp2350b``, ``rp2354``, ``rp2354a``, ``rp2354b`` (see `CHIP_VERSION`).
+    side_set : int
+        Number of side-set bits, 0 to 5 (the enable bit of `side_opt` counts against the five bits shared with the delay).
+    side_opt : bool
+        Side-set is optional per instruction (adds an enable bit); needs ``side_set >= 1``.
+    side_pindirs : bool
+        Side-set drives pin directions instead of levels; needs ``side_set >= 1``.
+    origin : int or None
+        Fixed load address (pioasm `.origin`), 0 to 31, or None.
+    emit_version : bool
+        Write a ``.pio_version`` line in `pio_text`.
+
+    Attributes
+    ----------
+    name : str
+        The program name.
+    chip : str
+        The chip name as given.
+    version : int
+        The PIO version of the chip: 0 or 1.
+    emit_version : bool
+        Whether `pio_text` writes ``.pio_version``.
+    side_count, side_opt, side_pindirs, origin :
+        The side-set and origin settings as given.
+    clock_div : int, float or None
+        Set by `clock_divider`.
+    fifo_config : str or None
+        Set by `fifo`.
+    status_cfg : str or None
+        The ``.mov_status`` line set by `mov_status`.
+    in_cfg, out_cfg : str or None
+        The ``.in`` / ``.out`` lines set by `config_in` and `config_out`.
+    set_count : int or None
+        Set by `config_set`.
+    defines : list of tuple
+        ``(symbol, value, public)`` entries added by `define`.
+
+    Raises
+    ------
+    PioError
+        If the name, the chip or the side-set settings are not valid.
+
+    Examples
+    --------
+    A program with an optional side-set bit; ``side`` and ``delay`` share the five bits:
+
+    >>> from pioweave.builder import Program, X, X_DEC
+    >>> p = Program("blink", side_set=1, side_opt=True)
+    >>> p.label("top")
+    'top'
+    >>> p.set(X, 5, side=1, delay=3)
+    >>> p.jmp("top", when=X_DEC, side=0)
+    >>> print(p.pio_text(), end="")
+    .program blink
+    .pio_version 0
+    .side_set 1 opt
+    top:
+        set x, 5 side 1 [3]
+        jmp x-- top side 0
+    >>> [hex(w) for w in p.words()]
+    ['0xfb25', '0x1040']
+    """
 
     def __init__(self, name, chip="rp2040", side_set=0, side_opt=False, side_pindirs=False, origin=None, emit_version=True):
         if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
@@ -114,12 +211,36 @@ class Program:
             raise PioError("%s must come before the first instruction (pioasm rule)" % what)
 
     def clock_divider(self, divider):
+        """Set the default clock divider (pioasm `.clock_div`; it only changes the generated C header).
+
+        Parameters
+        ----------
+        divider : int or float
+            A positive number.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or `divider` is not a positive number.
+        """
         self._before_code("clock_divider")
         if not isinstance(divider, (int, float)) or isinstance(divider, bool) or divider <= 0:
             raise PioError("clock divider must be a positive number")
         self.clock_div = divider
 
     def fifo(self, config):
+        """Set the FIFO configuration (pioasm `.fifo`).
+
+        Parameters
+        ----------
+        config : str
+            ``txrx``, ``tx`` or ``rx``; on PIO version 1 (RP2350, RP2354) also ``txput``, ``txget`` or ``putget``.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or `config` is not allowed on this chip.
+        """
         self._before_code("fifo")
         names = ("txrx", "tx", "rx") + (("txput", "txget", "putget") if self.version >= 1 else ())
         if config not in names:
@@ -127,7 +248,22 @@ class Program:
         self.fifo_config = config
 
     def mov_status(self, kind, n, which=None):
-        """kind 'rxfifo' or 'txfifo' (level below n), or 'irq' (flag n is set; RP2350 / RP2354 only; which None, 'prev' or 'next')."""
+        """Set the source of ``mov ..., status`` (pioasm `.mov_status`).
+
+        Parameters
+        ----------
+        kind : str
+            ``'rxfifo'`` or ``'txfifo'`` (status is true while the FIFO level is below `n`), or ``'irq'`` (status is true while flag `n` is set; RP2350 / RP2354 only).
+        n : int
+            The FIFO level, 0 to 15, or the IRQ flag, 0 to 7.
+        which : str or None
+            For ``'irq'`` only: None, ``'prev'`` or ``'next'``.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or an argument is not allowed on this chip.
+        """
         self._before_code("mov_status")
         if kind in ("rxfifo", "txfifo"):
             self.status_cfg = ".mov_status %s < %d" % (kind, _int(n, 0, 15, "mov_status level"))
@@ -154,24 +290,104 @@ class Program:
         return ".%s %d%s%s%s" % (what, count, " " + direction if direction else "", " auto" if auto else "", " %d" % threshold if threshold is not None else "")
 
     def config_in(self, count, direction=None, auto=False, threshold=None):
+        """Set the default input shift configuration (pioasm `.in`).
+
+        Parameters
+        ----------
+        count : int
+            Number of input pins, 1 to 32; must be 32 on PIO version 0.
+        direction : str or None
+            ``'left'``, ``'right'`` or None.
+        auto : bool
+            Enable autopush.
+        threshold : int or None
+            Autopush threshold, 1 to 32; needs ``auto=True``.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or an argument is not allowed on this chip.
+        """
         self.in_cfg = self._shift_cfg("in", count, direction, auto, threshold)
 
     def config_out(self, count, direction=None, auto=False, threshold=None):
+        """Set the default output shift configuration (pioasm `.out`).
+
+        Parameters
+        ----------
+        count : int
+            Number of output pins, 1 to 32; must be 32 on PIO version 0.
+        direction : str or None
+            ``'left'``, ``'right'`` or None.
+        auto : bool
+            Enable autopull.
+        threshold : int or None
+            Autopull threshold, 1 to 32; needs ``auto=True``.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or an argument is not allowed on this chip.
+        """
         self.out_cfg = self._shift_cfg("out", count, direction, auto, threshold)
 
     def config_set(self, count):
+        """Set the number of pins driven by ``set pins`` (pioasm `.set`).
+
+        Parameters
+        ----------
+        count : int
+            0 to 5.
+
+        Raises
+        ------
+        PioError
+            If an instruction was already added, or `count` is out of range.
+        """
         self._before_code(".set")
         _int(count, 0, 5, ".set count")
         self.set_count = count
 
     def define(self, symbol, value, public=False):
+        """Add a symbol (pioasm `.define`).
+
+        Parameters
+        ----------
+        symbol : str
+            Letters, digits and underscores, not starting with a digit.
+        value : int
+            A 32-bit value.
+        public : bool
+            Write ``PUBLIC``, which exports the symbol to the generated C header.
+
+        Raises
+        ------
+        PioError
+            If the symbol or the value is not valid.
+        """
         if not symbol or not symbol.replace("_", "a").isalnum() or symbol[0].isdigit():
             raise PioError("symbol %r must be alphanumeric/underscore" % (symbol,))
         self.defines.append((symbol, _int(value, -(1 << 31), (1 << 32) - 1, "define value"), bool(public)))
 
     # ---- structure
     def label(self, name):
-        """Name the next instruction; usable as a JMP target before or after this point."""
+        """Name the next instruction; usable as a JMP target before or after this point.
+
+        Parameters
+        ----------
+        name : str
+            Letters, digits and underscores, not starting with a digit; unique in the program.
+
+        Returns
+        -------
+        str
+            `name`, to be passed to `jmp`.
+
+        Raises
+        ------
+        PioError
+            If the name is not valid or already defined.
+        """
         if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
             raise PioError("label %r must be alphanumeric/underscore and not start with a digit" % (name,))
         if name in self._label_names:
@@ -181,14 +397,26 @@ class Program:
         return name
 
     def wrap_target(self):
-        """Execution continues here after the wrap point (default: the first instruction)."""
+        """Execution continues here after the wrap point (default: the first instruction).
+
+        Raises
+        ------
+        PioError
+            If it was already used.
+        """
         if self._wrap_target_set:
             raise PioError("wrap_target may be used only once")
         self._wrap_target_set = True
         self._pending_wrap_target = True
 
     def wrap(self):
-        """The instruction just written is the last of the loop: after it execution wraps (default: the last instruction)."""
+        """The instruction just written is the last of the loop: after it execution wraps (default: the last instruction).
+
+        Raises
+        ------
+        PioError
+            If it was already used, or no instruction was written yet.
+        """
         if self._wrap_set:
             raise PioError("wrap may be used only once")
         if not self._instrs:
@@ -198,7 +426,18 @@ class Program:
 
     @contextmanager
     def wrapped(self):
-        """`with p.wrapped():` makes the instructions inside the wrap loop."""
+        """``with p.wrapped():`` makes the instructions inside the wrap loop (`wrap_target` before them, `wrap` after them).
+
+        Examples
+        --------
+        >>> from pioweave.builder import Program, PINS
+        >>> p = Program("w")
+        >>> p.nop()
+        >>> with p.wrapped():
+        ...     p.set(PINS, 1)
+        >>> p.wrap_range
+        (1, 1)
+        """
         self.wrap_target()
         yield
         self.wrap()
@@ -223,9 +462,39 @@ class Program:
         return ins
 
     def nop(self, side=None, delay=0):
+        """``nop`` (encoded as ``mov y, y``).
+
+        Parameters
+        ----------
+        side : int or None
+            Side-set value, or None.
+        delay : int
+            Delay cycles; the maximum depends on the side-set bits.
+
+        Raises
+        ------
+        PioError
+            If `side` or `delay` is out of range, or `side` is missing in a program with a mandatory side-set.
+        """
         self._add("nop", side, delay)
 
     def jmp(self, target, when=ALWAYS, side=None, delay=0):
+        """``jmp`` to a label or an address, optionally on a condition.
+
+        Parameters
+        ----------
+        target : str or int
+            A label name (see `label`) or an address 0 to 31.
+        when : _Name
+            The condition: `ALWAYS`, `NOT_X`, `X_DEC`, `NOT_Y`, `Y_DEC`, `X_NE_Y`, `PIN` or `NOT_OSRE`.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If the condition or target is not valid, or `side` / `delay` is out of range.
+        """
         _pick(_COND, when, "jmp condition")
         if not isinstance(target, (str, int)) or isinstance(target, bool):
             raise PioError("jmp target must be a label name or an address")
@@ -238,40 +507,187 @@ class Program:
         self._add("wait", side, delay, pol=pol, src=src, idx=idx, rel=rel, mode=mode)
 
     def wait_gpio(self, polarity, gpio, side=None, delay=0):
-        """Wait on a real GPIO number: 0 to 31, or 0 to 47 on PIO version 1 (RP2350 / RP2354; the B variants have 48 GPIOs)."""
+        """``wait polarity gpio gpio``: wait on a real GPIO number.
+
+        Parameters
+        ----------
+        polarity : int
+            0 or 1, the level to wait for.
+        gpio : int
+            0 to 31, or 0 to 47 on PIO version 1 (RP2350 / RP2354; the B variants have 48 GPIOs).
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is out of range.
+        """
         self._wait(polarity, "gpio", _int(gpio, 0, 47 if self.version >= 1 else 31, "GPIO number"), side, delay)
 
     def wait_pin(self, polarity, pin, side=None, delay=0):
-        """Wait on input pin `pin` of the state machine's IN mapping (IN_BASE + pin)."""
+        """``wait polarity pin pin``: wait on input pin `pin` of the state machine's IN mapping (IN_BASE + pin).
+
+        Parameters
+        ----------
+        polarity : int
+            0 or 1, the level to wait for.
+        pin : int
+            0 to 31.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is out of range.
+        """
         self._wait(polarity, "pin", _int(pin, 0, 31, "pin index"), side, delay)
 
     def wait_irq(self, polarity, flag, rel=False, other=None, side=None, delay=0):
-        """`other` selects the neighbouring PIO block ('prev' or 'next', RP2350 / RP2354 only; no rel)."""
+        """``wait polarity irq flag``: wait on an IRQ flag.
+
+        Parameters
+        ----------
+        polarity : int
+            0 or 1, the flag level to wait for.
+        flag : int
+            0 to 7.
+        rel : bool
+            Add the state machine number to the low two bits of the flag number.
+        other : str or None
+            Selects the neighbouring PIO block, ``'prev'`` or ``'next'`` (RP2350 / RP2354 only; not with `rel`).
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is out of range or not allowed on this chip.
+        """
         self._irq_target(flag, rel, other)
         self._wait(polarity, "irq", flag, side, delay, rel=rel, mode=other)
 
     def wait_jmppin(self, polarity, offset=0, side=None, delay=0):
+        """``wait polarity jmppin [+ offset]`` (PIO version 1 only): wait on the JMP pin plus `offset`.
+
+        Parameters
+        ----------
+        polarity : int
+            0 or 1, the level to wait for.
+        offset : int
+            0 to 3.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If the chip is PIO version 0, or an argument is out of range.
+        """
         if self.version < 1:
             raise PioError("wait jmppin needs PIO version 1 (RP2350 / RP2354)")
         self._wait(polarity, "jmppin", _int(offset, 0, 3, "jmppin offset"), side, delay)
 
     def in_(self, src, bits, side=None, delay=0):
+        """``in src, bits``: shift `bits` bits from `src` into the ISR.
+
+        Parameters
+        ----------
+        src : _Name
+            `PINS`, `X`, `Y`, `NULL`, `ISR` or `OSR`.
+        bits : int
+            1 to 32.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is not allowed.
+        """
         _pick(_IN_SRC, src, "in source")
         self._add("in", side, delay, src=src, bits=_int(bits, 1, 32, "in bit count"))
 
     def out(self, dst, bits, side=None, delay=0):
+        """``out dst, bits``: shift `bits` bits out of the OSR into `dst`.
+
+        Parameters
+        ----------
+        dst : _Name
+            `PINS`, `X`, `Y`, `NULL`, `PINDIRS`, `PC`, `ISR` or `EXEC`.
+        bits : int
+            1 to 32.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is not allowed.
+        """
         _pick(_OUT_DST, dst, "out destination")
         self._add("out", side, delay, dst=dst, bits=_int(bits, 1, 32, "out bit count"))
 
     def push(self, iffull=False, block=True, side=None, delay=0):
+        """``push [iffull] [block | noblock]``: push the ISR to the RX FIFO.
+
+        Parameters
+        ----------
+        iffull : bool
+            Push only when the ISR is full to its threshold.
+        block : bool
+            Stall when the FIFO is full (``block``) instead of dropping the word (``noblock``).
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If the program's FIFO configuration has no RX FIFO, or `side` / `delay` is out of range.
+        """
         if self.fifo_config not in (None, "txrx", "rx"):
             raise PioError("push needs fifo txrx or rx, this program has fifo %s (pioasm rule)" % self.fifo_config)
         self._add("push", side, delay, iff=bool(iffull), blk=bool(block))
 
     def pull(self, ifempty=False, block=True, side=None, delay=0):
+        """``pull [ifempty] [block | noblock]``: load the OSR from the TX FIFO.
+
+        Parameters
+        ----------
+        ifempty : bool
+            Pull only when the OSR is empty to its threshold.
+        block : bool
+            Stall when the FIFO is empty (``block``) instead of loading X (``noblock``).
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If `side` or `delay` is out of range.
+        """
         self._add("pull", side, delay, ife=bool(ifempty), blk=bool(block))
 
     def mov(self, dst, src, op=NONE, side=None, delay=0):
+        """``mov dst, [op] src``.
+
+        Parameters
+        ----------
+        dst : _Name
+            `PINS`, `X`, `Y`, `PINDIRS` (PIO version 1 only), `EXEC`, `PC`, `ISR` or `OSR`.
+        src : _Name
+            `PINS`, `X`, `Y`, `NULL`, `STATUS`, `ISR` or `OSR`.
+        op : _Name
+            `NONE`, `INVERT` or `REVERSE`.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is not allowed on this chip.
+        """
         _pick(_MOV_DST, dst, "mov destination")
         _pick(_MOV_SRC, src, "mov source")
         _pick(_MOV_OP, op, "mov operation")
@@ -280,28 +696,100 @@ class Program:
         self._add("mov", side, delay, dst=dst, src=src, op=op)
 
     def mov_put(self, index, side=None, delay=0):
-        """mov rxfifo[index], isr (RP2350 / RP2354). `index` is 0..3 or Y."""
+        """``mov rxfifo[index], isr`` (RP2350 / RP2354).
+
+        Parameters
+        ----------
+        index : int or _Name
+            0 to 3, or `Y`.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If the chip is PIO version 0, the program's FIFO configuration is not ``txput`` or ``putget``, or an argument is out of range.
+        """
         self._rx_index(index, True)
         self._add("movrx", side, delay, put=True, index=index)
 
     def mov_get(self, index, side=None, delay=0):
-        """mov osr, rxfifo[index] (RP2350 / RP2354). `index` is 0..3 or Y."""
+        """``mov osr, rxfifo[index]`` (RP2350 / RP2354).
+
+        Parameters
+        ----------
+        index : int or _Name
+            0 to 3, or `Y`.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If the chip is PIO version 0, the program's FIFO configuration is not ``txget`` or ``putget``, or an argument is out of range.
+        """
         self._rx_index(index, False)
         self._add("movrx", side, delay, put=False, index=index)
 
     def irq(self, flag, mode=SET, rel=False, other=None, side=None, delay=0):
-        """irq set | wait | clear FLAG. `rel` adds the state machine number to the low two bits; `other` is 'prev' or 'next' (RP2350 / RP2354)."""
+        """``irq set | wait | clear flag``.
+
+        Parameters
+        ----------
+        flag : int
+            0 to 7.
+        mode : _Name
+            `SET`, `WAIT` (set and wait until it is cleared) or `CLEAR`.
+        rel : bool
+            Add the state machine number to the low two bits of the flag number.
+        other : str or None
+            ``'prev'`` or ``'next'``: the neighbouring PIO block (RP2350 / RP2354 only; not with `rel`).
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is out of range or not allowed on this chip.
+        """
         if mode not in (SET, WAIT, CLEAR):
             raise PioError("irq mode must be SET, WAIT or CLEAR")
         self._irq_target(flag, rel, other)
         self._add("irq", side, delay, flag=flag, mode=mode, rel=rel, other=other)
 
     def set(self, dst, value, side=None, delay=0):
+        """``set dst, value``.
+
+        Parameters
+        ----------
+        dst : _Name
+            `PINS`, `X`, `Y` or `PINDIRS`.
+        value : int
+            0 to 31.
+        side, delay :
+            As for `nop`.
+
+        Raises
+        ------
+        PioError
+            If an argument is not allowed.
+        """
         _pick(_SET_DST, dst, "set destination")
         self._add("set", side, delay, dst=dst, value=_int(value, 0, 31, "set value"))
 
     def word(self, value):
-        """A raw 16-bit instruction word (pioasm .word)."""
+        """A raw 16-bit instruction word (pioasm ``.word``).
+
+        Parameters
+        ----------
+        value : int
+            0 to 0xFFFF.
+
+        Raises
+        ------
+        PioError
+            If `value` is out of range, or the program has a mandatory side-set (pioasm cannot assemble that).
+        """
         if self.side_count and not self.side_opt:
             raise PioError(".word cannot be assembled by pioasm in a program with a mandatory side-set (it asks for a side value and then rejects it); use side_opt")
         self._add("word", None, 0, value=_int(value, 0, 0xFFFF, "word"))
@@ -391,7 +879,34 @@ class Program:
         return ".word 0x%04X" % f["value"]
 
     def pio_text(self):
-        """The program as pioasm source."""
+        """The program as pioasm source.
+
+        Returns
+        -------
+        str
+            The text, one line per directive, label or instruction, ending in a newline.
+
+        Raises
+        ------
+        PioError
+            If the program is inconsistent: no instructions, a label or wrap target past the last instruction, a jump to an undefined label or beyond the end,
+            a ``wait gpio`` that needs two GPIO windows, or an origin that does not fit the 32-word memory.
+
+        Examples
+        --------
+        >>> from pioweave.builder import Program, PINS
+        >>> p = Program("square")
+        >>> with p.wrapped():
+        ...     p.set(PINS, 1, delay=1)
+        ...     p.set(PINS, 0, delay=1)
+        >>> print(p.pio_text(), end="")
+        .program square
+        .pio_version 0
+        .wrap_target
+            set pins, 1 [1]
+            set pins, 0 [1]
+        .wrap
+        """
         self._resolve()
         out = [".program " + self.name]
         if self.emit_version:
@@ -443,7 +958,31 @@ class Program:
         return v
 
     def words(self):
-        """The assembled 16-bit words as pioasm writes them: JMP targets are relative to the start of the program (the SDK adds the load offset)."""
+        """The assembled 16-bit words as pioasm writes them: JMP targets are relative to the start of the program (the SDK adds the load offset).
+
+        The encoder is written from the datasheet tables and does not call pioasm. A ``wait gpio`` on GPIO 32 to 47 sets bit 16 of its word, the flag that pioasm
+        uses for it.
+
+        Returns
+        -------
+        list of int
+            One word per instruction.
+
+        Raises
+        ------
+        PioError
+            As for `pio_text`.
+
+        Examples
+        --------
+        >>> from pioweave.builder import Program, PINS
+        >>> p = Program("square")
+        >>> with p.wrapped():
+        ...     p.set(PINS, 1, delay=1)
+        ...     p.set(PINS, 0, delay=1)
+        >>> [hex(w) for w in p.words()]
+        ['0xe101', '0xe100']
+        """
         addr = self._resolve()
         out = []
         for ins in self._instrs:
@@ -489,7 +1028,13 @@ class Program:
 
     @property
     def wrap_range(self):
-        """(wrap_target, wrap_top) as instruction indexes, with the defaults."""
+        """``(wrap_target, wrap_top)`` as instruction indexes, with the defaults (first and last instruction).
+
+        Raises
+        ------
+        PioError
+            As for `pio_text`.
+        """
         self._resolve()
         t = next((i for i, x in enumerate(self._instrs) if x.wrap_target), 0)
         w = next((i for i, x in enumerate(self._instrs) if x.wrap_top), len(self._instrs) - 1)
@@ -497,6 +1042,19 @@ class Program:
 
 
 def write_pio(programs, path):
-    """Write one or more programs into a .pio file (a global `.pio_version` is not written; each program carries its own)."""
+    """Write one or more programs into a .pio file (a global ``.pio_version`` is not written; each program carries its own).
+
+    Parameters
+    ----------
+    programs : iterable of Program
+        The programs, written in order.
+    path : str
+        The file to write.
+
+    Raises
+    ------
+    PioError
+        If a program is inconsistent (see `Program.pio_text`).
+    """
     with open(path, "w") as fh:
         fh.write("\n".join(p.pio_text() for p in programs))

@@ -68,3 +68,6 @@ jobs:
       - name: Build the documentation
         run: |
           sphinx-build -W docs docs/_build
+      - name: Run the doctests in the docstrings
+        run: |
+          sphinx-build -W -b doctest docs docs/_build/doctest

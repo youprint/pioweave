@@ -10,6 +10,8 @@ import sys
 
 from ._compat import TESTED, TESTED_DEV, check_version
 
+__all__ = ["TOOLS", "report", "main"]
+
 TOOLS = (
     ("pioasm", "PIOASM", "assembles .pio files (needed for MicroPython projects and for bitweave's pio flow); build it from the Pico SDK (tools/pioasm) or `bitweave guide pio`"),
     ("bitweave", "BITWEAVE", "checks a generated program in a PIO simulator, builds firmware, loads boards (github.com/youprint/bitweave)"),
@@ -26,7 +28,13 @@ def _which(name, env):
 
 
 def report():
-    """[(status, name, detail)] with status 'ok', 'note' (optional, missing) or 'fail' (an essential does not work)."""
+    """Check the Python environment.
+
+    Returns
+    -------
+    list of tuple
+        ``(status, name, detail)`` rows; `status` is ``'ok'``, ``'note'`` (an optional item is missing) or ``'fail'`` (an essential does not work).
+    """
     rows = []
     v = sys.version_info
     rows.append(("ok" if v >= (3, 9) else "fail", "python", "%d.%d.%d at %s" % (v[0], v[1], v[2], sys.executable)))
@@ -69,6 +77,20 @@ def _smoke():
 
 
 def main(strict=False, out=None):
+    """Print the report of `report` and a verdict.
+
+    Parameters
+    ----------
+    strict : bool
+        Count a missing optional item as a failure.
+    out : file-like or None
+        Where to write; None means ``sys.stdout``.
+
+    Returns
+    -------
+    int
+        The exit code: 0 when the essentials work, else 1.
+    """
     out = out or sys.stdout
     rows = report()
     for status, name, detail in rows:

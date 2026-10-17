@@ -18,6 +18,8 @@ from . import designs
 from .project import SimOptions
 from .platform import PLATFORMS
 
+__all__ = ["main"]
+
 
 def _resolve(a):
     if a.design in designs.PROGRAMS:
@@ -72,6 +74,18 @@ def _emulate(a):
 
 
 def main(argv=None):
+    """Run the command line (see the module documentation).
+
+    Parameters
+    ----------
+    argv : list of str or None
+        The arguments; None means ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        The exit code.
+    """
     ap = argparse.ArgumentParser(prog="python -m pioweave", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="list the example designs")

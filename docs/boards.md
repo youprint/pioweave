@@ -3,6 +3,8 @@
 One module per board, as `amaranth-boards` does: `from pioweave.boards.pico import PicoPlatform`. A board class is a chip platform (`RP2040PioPlatform`, `RP2350APioPlatform`, `RP2350BPioPlatform`) plus the named pins of
 the board, so a design can ask for `"led"` instead of a GPIO number. The chip's own `gpio` resources stay available next to them.
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/boards`.
+
 ```python
 from amaranth.hdl import Module
 from pioweave import PioDesign, SimOptions

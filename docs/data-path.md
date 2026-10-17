@@ -4,6 +4,8 @@ A PIO state machine moves data with two 4-word FIFOs (TX: host to machine, RX: m
 `platform.shifter(m)` gives an Amaranth design the same pieces, and its helper methods add to the current FSM state exactly the register updates of one PIO instruction, so the Amaranth simulation stays the
 reference for the compiled program.
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/data`.
+
 ```python
 sh = platform.shifter(m, out_shift="right", in_shift="right")    # once per design, inside elaborate()
 ```

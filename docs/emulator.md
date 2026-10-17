@@ -3,6 +3,8 @@
 A software model of the PIO blocks of the RP2040, RP2350 and RP2354, written in Python and needing no Amaranth. It runs a program cycle by cycle the way the datasheets describe it, so you can
 see the pins, the registers and the FIFOs without a chip, and so that pioweave can check a design against a second, independent implementation.
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/emulator`.
+
 ```python
 from pioweave.builder import Program, PINS, X, X_DEC
 from pioweave.emulator import run_case

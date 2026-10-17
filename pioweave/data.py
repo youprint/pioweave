@@ -2,7 +2,7 @@
 """The data path of a PIO state machine for designs written in Amaranth: the TX and RX FIFOs and the OSR / ISR shifters (design note docs/amaranth-pio.md).
 
 `platform.shifter(m)` returns a `Shifter`. Its methods add to the current FSM state exactly the register updates that one PIO instruction does, so the Amaranth
-simulation of the design is the reference for the compiled program:
+simulation of the design is the reference for the compiled program::
 
     sh = platform.shifter(m, out_shift="right", in_shift="right")
     with m.State("PULL"):
@@ -27,6 +27,11 @@ from amaranth.hdl import Array, Cat, Const, Module, Mux, Signal
 from amaranth.lib import wiring
 from amaranth.lib.wiring import In, Out
 
+__all__ = [
+    "DEPTH", "PULL_BLOCK", "PULL_NOBLOCK", "PUSH_BLOCK", "PUSH_NOBLOCK", "OUT_PINS", "OUT_X", "OUT_Y", "OUT_NULL", "IN_PINS", "IN_X", "IN_Y", "IN_NULL", "NAMES",
+    "FifoModel", "Shifter",
+]
+
 DEPTH = 4          # words in each FIFO (RP2040 datasheet 3.5.3, RP2350 datasheet 11.4; joining the two FIFOs to 8 is not modelled)
 
 # marker codes of the operation a state performs (assigned to Shifter.op)
@@ -41,7 +46,13 @@ class FifoModel(wiring.Component):
     """The two FIFOs of a state machine, seen from the design (`tx_ready`, `tx_head`, `rx_space`, and the toggles `tx_pop` / `rx_push` with `rx_data`) and from
     the host (the `host_*` signals, driven by a testbench). A word taken or stored by the design in cycle t is applied one clock edge later, and the flags and the
     head of the FIFO already account for it, so the next instruction sees what the PIO shows it. The members of its signature are the signals; `In` means the design
-    or the host drives it, `Out` means the model drives it."""
+    or the host drives it, `Out` means the model drives it.
+
+    Parameters
+    ----------
+    tx_init : iterable of int
+        Words already in the TX FIFO at cycle 0 (at most `DEPTH`; more are ignored).
+    """
 
     def __init__(self, tx_init=()):
         self.tx_init = list(tx_init)[:DEPTH]
@@ -58,6 +69,7 @@ class FifoModel(wiring.Component):
         }))
 
     def elaborate(self, platform):
+        """Build the FIFO model (Amaranth's ``elaborate``); `platform` is not used."""
         m = Module()
         n0 = len(self.tx_init)
         tx_mem = Array([Signal(32, init=self.tx_init[i] if i < n0 else 0, name="tx_mem%d" % i) for i in range(DEPTH)])
@@ -98,7 +110,41 @@ class FifoModel(wiring.Component):
 
 
 class Shifter:
-    """OSR, ISR and the FIFOs of one state machine; created by `platform.shifter(m)`."""
+    """OSR, ISR and the FIFOs of one state machine; created by ``platform.shifter(m)``.
+
+    Parameters
+    ----------
+    platform : pioweave.platform.RP2040PioPlatform
+        The platform; it allows one shifter per design.
+    m : amaranth.hdl.Module
+        The module of the design; the FIFO model is added to it as the submodule ``pio_fifo``.
+    out_shift, in_shift : str
+        ``"right"`` or ``"left"``, the shift direction of the OSR and the ISR.
+    tx_init : iterable of int
+        Words in the TX FIFO at cycle 0.
+
+    Attributes
+    ----------
+    platform : pioweave.platform.RP2040PioPlatform
+        The platform.
+    out_shift, in_shift : str
+        The shift directions as given.
+    fifo : FifoModel
+        The FIFO model.
+    osr, osr_n : amaranth.hdl.Signal
+        The output shift register and the number of bits shifted out of it (32 means empty).
+    isr, isr_n : amaranth.hdl.Signal
+        The input shift register and the number of bits shifted into it.
+    op, arg : amaranth.hdl.Signal
+        The marker registers the compiler reads: the operation code (see `NAMES`) and its bit count.
+    in_sources : list of amaranth.hdl.Signal
+        The input pin signals `in_` has read.
+
+    Raises
+    ------
+    ValueError
+        If a direction is not ``"right"`` or ``"left"``, or the platform already has a shifter.
+    """
 
     def __init__(self, platform, m, out_shift="right", in_shift="right", tx_init=()):
         if out_shift not in ("right", "left") or in_shift not in ("right", "left"):
@@ -146,7 +192,20 @@ class Shifter:
     @contextlib.contextmanager
     def pull(self, m, block=True):
         """`pull block` (default): use as `with sh.pull(m): m.next = ...`; the body runs when a word was taken, otherwise the state stays. `block=False`
-        (`pull noblock`): a plain call, X is loaded into the OSR when the FIFO is empty."""
+        (`pull noblock`): a plain call, X is loaded into the OSR when the FIFO is empty.
+
+        Parameters
+        ----------
+        m : amaranth.hdl.Module
+            The module of the design, inside the FSM state that does the pull.
+        block : bool
+            ``pull block`` (True) or ``pull noblock`` (False).
+
+        Yields
+        ------
+        None
+            The body runs in the cycle in which a word was taken (always, for ``noblock``).
+        """
         f = self.fifo
         if block:
             with m.If(f.tx_ready):
@@ -161,7 +220,20 @@ class Shifter:
 
     @contextlib.contextmanager
     def push(self, m, block=True):
-        """`push block` (default), used like `pull`; `block=False`: the word is dropped (ISR cleared) when the RX FIFO is full."""
+        """`push block` (default), used like `pull`; `block=False`: the word is dropped (ISR cleared) when the RX FIFO is full.
+
+        Parameters
+        ----------
+        m : amaranth.hdl.Module
+            The module of the design, inside the FSM state that does the push.
+        block : bool
+            ``push block`` (True) or ``push noblock`` (False).
+
+        Yields
+        ------
+        None
+            The body runs in the cycle in which the word was stored (always, for ``noblock``).
+        """
         f = self.fifo
         if block:
             with m.If(f.rx_space):
@@ -174,7 +246,22 @@ class Shifter:
             yield
 
     def out(self, m, dest, n=None):
-        """`out dest, n`. `dest` is an output pin group from platform.buffer() (n defaults to its width), "x", "y" or "null"."""
+        """`out dest, n`. `dest` is an output pin group from platform.buffer() (n defaults to its width), "x", "y" or "null".
+
+        Parameters
+        ----------
+        m : amaranth.hdl.Module
+            The module of the design, inside the FSM state that does the out.
+        dest : object or str
+            A buffer from ``platform.buffer(m, "o", ...)``, or ``"x"``, ``"y"`` or ``"null"``.
+        n : int or None
+            The bit count, 1 to 32 (a constant); None means the width of the pin group, or 32.
+
+        Raises
+        ------
+        ValueError
+            If `n` is not a constant in range.
+        """
         if dest in ("x", "y", "null"):
             n = self._count(32 if n is None else n)
             data = self._out_data(n)
@@ -189,7 +276,22 @@ class Shifter:
         self._osr_shift(m, n)
 
     def in_(self, m, src, n=None):
-        """`in src, n`. `src` is an input pin group from platform.buffer() (n defaults to its width), "x", "y" or "null"."""
+        """`in src, n`. `src` is an input pin group from platform.buffer() (n defaults to its width), "x", "y" or "null".
+
+        Parameters
+        ----------
+        m : amaranth.hdl.Module
+            The module of the design, inside the FSM state that does the in.
+        src : object or str
+            A buffer from ``platform.buffer(m, "i", ...)``, or ``"x"``, ``"y"`` or ``"null"``.
+        n : int or None
+            The bit count, 1 to 32 (a constant; at most the pin group width for pins); None means the width of the pin group, or 32.
+
+        Raises
+        ------
+        ValueError
+            If `n` is not a constant in range.
+        """
         if src in ("x", "y"):
             n = self._count(32 if n is None else n)
             data = self.platform.scratch(src)[:n]

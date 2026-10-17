@@ -7,7 +7,8 @@ simulation of the design is the reference (tests/test_pio_compile.py compares it
 cycle). The compiler reads the Amaranth 0.5.10 IR (Fragment.statements); anything it cannot map without changing the cycle behaviour is refused
 with the source line, never approximated.
 
-Accepted (all in the `sync` domain, one `m.FSM()`, no submodules):
+Accepted (all in the `sync` domain, one `m.FSM()`, no submodules)::
+
   state effects      pin outputs from platform.request() assigned constants      -> `set pins` (or side-set, see below)
                      X or Y from platform.scratch() assigned 0..31               -> `set x/y`
                      X or Y assigned the other register or its complement        -> `mov`
@@ -19,6 +20,7 @@ Accepted (all in the `sync` domain, one `m.FSM()`, no submodules):
                      a state that stays until an input pin has a level           -> `wait`
   delay              states without any effect that follow an instruction are folded into its delay (`[n]`) when nothing jumps to them
   side-set           pin outputs assigned in a state that also does something else (or a jump / wait) use the side-set of the program
+
 Refused: more than one operation per state (it would need two cycles), compound tests, tests on anything but X, Y and input pins, free-running
 logic outside the FSM, combinational logic, several FSMs, submodules, wide constants, registers with a non-zero reset value.
 """
@@ -33,11 +35,16 @@ from .builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, NULL, PINS, PIN, X, X_
 from . import data as D
 from ._compat import Fragment, ast, fsm_state_names
 
+__all__ = ["Compiled", "PioCompileError", "compile_design"]
+
 MAX_SIDE_BITS = 4      # with the enable bit of an optional side-set (5 bits shared with the delay)
 
 
 class PioCompileError(Exception):
-    """The design is outside the subset that maps to PIO without changing its cycle behaviour."""
+    """The design is outside the subset that maps to PIO without changing its cycle behaviour.
+
+    The message names the source line of the offending statement where Amaranth recorded one.
+    """
 
 
 _AMARANTH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(ast.__file__)))
@@ -72,6 +79,34 @@ class Br:
 
 
 class Compiled:
+    """The result of `compile_design`: the PIO program and what the project writers and the emulator need to know about the design.
+
+    Attributes
+    ----------
+    name : str
+        The program name.
+    chip : str
+        The chip name of the platform.
+    program : pioweave.builder.Program
+        The compiled program.
+    states : list of tuple
+        ``(state name, instruction index or None)``; None when the state was folded into the delay of the instruction before it.
+    set_pin, side_pin, out_pin, in_pin : pioweave.platform.PinInfo or None
+        The pin groups driven by ``set pins``, driven by side-set, driven by ``out pins`` and read by ``in pins``.
+    jmp_gpio : int or None
+        The GPIO tested by ``jmp pin``.
+    input_gpios, output_gpios : list of int
+        The GPIOs the design reads and drives.
+    out_shift, in_shift : str or None
+        ``"right"`` or ``"left"`` when the program uses ``out`` or ``in``.
+    uses_tx, uses_rx : bool
+        The program has a ``pull`` (TX FIFO) or a ``push`` (RX FIFO).
+    wrap_target_state : int
+        The index of the state the program wraps to (the wrap target).
+    gpio_base : int
+        The GPIO that PIO pin 0 maps to: 0, or 16 on the 48-GPIO parts (RP2350B, RP2354B).
+    """
+
     def __init__(self):
         self.name = None
         self.chip = None
@@ -92,12 +127,29 @@ class Compiled:
         self.gpio_base = 0        # GPIO that PIO pin 0 maps to: 0, or 16 on the 48-GPIO parts (RP2350B, RP2354B)
 
     def pin(self, gpio):
-        """The PIO's own number of a real GPIO (relative to the GPIO base)."""
+        """The PIO's own number of a real GPIO (relative to the GPIO base).
+
+        Parameters
+        ----------
+        gpio : int
+            A GPIO number.
+
+        Returns
+        -------
+        int
+            ``gpio - gpio_base``.
+        """
         return gpio - self.gpio_base
 
     def sim_config(self):
-        """Keys of a bitweave `[[pio.NAME.sim]]` case that configure the state machine like the generated C / MicroPython project. Pin numbers are the
-        PIO's own (relative to `gpio_base`), as bitweave's simulator takes them."""
+        """Keys of a bitweave ``[[pio.NAME.sim]]`` case that configure the state machine like the generated C / MicroPython project. Pin numbers are the
+        PIO's own (relative to `gpio_base`), as bitweave's simulator takes them.
+
+        Returns
+        -------
+        dict
+            The configuration, usable as keyword arguments of `pioweave.emulator.run_case`.
+        """
         c = {}
         if self.set_pin:
             c["set_base"], c["set_count"] = self.pin(self.set_pin.gpios[0]), len(self.set_pin.gpios)
@@ -370,7 +422,46 @@ def _split_effects(effects, ctx, loc):
 
 # ----------------------------------------------------------------------------- the compiler
 def compile_design(top, platform, name="top"):
-    """Compile `top` (an Elaboratable using `platform`) to a Compiled with a pioprog.Program."""
+    """Compile an Amaranth design to a PIO program.
+
+    The design must be written in the restricted style described in the module documentation: one FSM, one state per PIO instruction. The compiler elaborates
+    the design with `platform`.
+
+    Parameters
+    ----------
+    top : amaranth.hdl.Elaboratable
+        The design.
+    platform : pioweave.platform.RP2040PioPlatform
+        A fresh instance of one of the PIO platforms.
+    name : str
+        The program name.
+
+    Returns
+    -------
+    Compiled
+        The program and the pin and FIFO information.
+
+    Raises
+    ------
+    PioCompileError
+        If the design is outside the accepted subset; the message names the source line.
+
+    Examples
+    --------
+    >>> from pioweave.compile import compile_design
+    >>> from pioweave.designs import SquareWave
+    >>> from pioweave.platform import RP2040PioPlatform
+    >>> compiled = compile_design(SquareWave(), RP2040PioPlatform(), "square")
+    >>> print(compiled.program.pio_text(), end="")
+    .program square
+    .pio_version 0
+        set pins, 1 [1]
+        set pins, 0 [1]
+    >>> [hex(w) for w in compiled.program.words()]
+    ['0xe101', '0xe100']
+    >>> compiled.states
+    [('HIGH', 0), ('HIGH_HOLD', None), ('LOW', 1), ('LOW_HOLD', None)]
+    """
     frag = Fragment.get(top, platform)
     _check_fragment(frag)
     platform.bind_buffers(frag)
