@@ -16,3 +16,7 @@ __pycache__/
 *.vcd
 *.gtkw
 /docs/_build
+/.pdm-build
+/.pdm-plugins
+/.pdm-python
+/pdm.lock
