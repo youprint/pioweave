@@ -1,7 +1,7 @@
 # Testing
 
     pip install -e '.[test]'
-    pytest -q -W error tests                  # or: pdm run test
+    PYTHONWARNINGS=error python -m unittest discover -t . -s tests -v     # or: pdm run test
 
 Without the tools below, the tests that need them are **skipped, not passed**. Run `python -m pioweave doctor` to see which tools are found.
 
@@ -33,7 +33,7 @@ depends on the state machine clock and on the pads.
 | `PIO_EMU_N` | number of random programs in the emulator's differential test against bitweave (default 40; each takes about 4 s) |
 | `PIOWEAVE_ALLOW_UNTESTED=1` | let pioweave import with an Amaranth version it was not tested with |
 
-A random design that fails prints its seed, the generated program and the specification, so it can be replayed: `PIO_COSIM_N=200 pytest -k "random_data and 194"`.
+A random design that fails prints its seed, the generated program and the specification, so it can be replayed: `PIO_COSIM_N=200 python -m unittest -v tests.test_compile.DataPathTests.test_random_data_path_designs_match_the_pio_simulator_194`.
 
 ## Getting the tools
 

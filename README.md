@@ -106,7 +106,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
     pioweave/builder/      the Python builder (needs no Amaranth)
     pioweave/emulator/     the PIO emulator (needs no Amaranth)
     pioweave/boards/       board definitions
-    tests/                 the tests (pytest); tests/__init__.py makes it a package
+    tests/                 the tests (unittest); tests/__init__.py makes it a package
     docs/                  the documentation (Sphinx with Markdown: `sphinx-build docs docs/_build`)
     scripts/matrix.sh      the Amaranth version matrix
     .github/workflows/     CI

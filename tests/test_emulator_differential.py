@@ -7,16 +7,15 @@ import re
 import shutil
 import subprocess
 import tempfile
-
-import pytest
+import unittest
 
 from pioweave.emulator import run_case
 
-from . import cosim
+from . import cosim, support
 from .emu_random import random_case
 
 BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
-needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
+needs_tools = unittest.skipIf(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
 N = int(os.environ.get("PIO_EMU_N", "40"))
 TOML_KEYS = ("set_base", "set_count", "out_base", "out_count", "sideset_base", "in_base", "in_count", "jmp_pin", "in_shift", "out_shift", "autopush", "autopull", "push_thresh",
              "pull_thresh", "x", "y", "dirs", "fifo_join", "status_sel", "status_n")
@@ -83,7 +82,9 @@ def compare(seed):
         assert (emu.rx_lost, emu.tx_dropped) == (sim["rx_lost"], sim["tx_dropped"]), why
 
 
-@needs_tools
-@pytest.mark.parametrize("seed", range(N))
-def test_emulator_matches_the_pio_simulator(seed):
-    compare(seed)
+@support.cases
+class DifferentialTests(support.TestCase):
+    @needs_tools
+    @support.parametrize("seed", range(N))
+    def test_emulator_matches_the_pio_simulator(self, seed):
+        compare(seed)

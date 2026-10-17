@@ -28,7 +28,7 @@ classifiers = [
 dependencies = ["amaranth>=0.5,<0.6"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["coverage"]
 
 [project.scripts]
 pioweave = "pioweave.__main__:main"
@@ -49,7 +49,6 @@ source-includes = ["tests", "docs", "LICENSE.txt", "CONTRIBUTING.txt", "README.m
 
 [tool.pdm.dev-dependencies]
 test = [
-  "pytest",
   "coverage",
 ]
 docs = [
@@ -59,11 +58,10 @@ docs = [
 ]
 
 [tool.pdm.scripts]
-test.cmd = "python -m pytest -q -W error tests"
-test-quick.cmd = "python -m pytest -q -W error tests/test_refusals.py tests/test_program.py tests/test_boards.py tests/test_docs.py"
+test.cmd = "python -m unittest discover -t . -s tests -v"
+test.env = {PYTHONWARNINGS = "error"}
+test-quick.cmd = "python -m unittest tests.test_refusals tests.test_program tests.test_boards tests.test_docs"
+test-quick.env = {PYTHONWARNINGS = "error"}
 document.cmd = "sphinx-build docs docs/_build"
 test-docs.cmd = "sphinx-build -W -b doctest docs docs/_build/doctest"
 matrix.cmd = "sh scripts/matrix.sh"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

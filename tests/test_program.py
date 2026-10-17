@@ -11,10 +11,10 @@ import os
 import shutil
 import subprocess
 import sys
-
-import pytest
+import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+from . import support
 from pioweave.builder import examples as pio_examples
 from pioweave.builder.program import (ALWAYS, CLEAR, EXEC, INVERT, ISR, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PC, PIN, PINDIRS, PINS, REVERSE, SET, STATUS, WAIT, X, X_DEC,  # noqa: E402
                      X_NE_Y, Y, Y_DEC, NONE, PioError, Program, write_pio)
@@ -28,7 +28,7 @@ def find_pioasm():
 
 
 PIOASM = find_pioasm()
-needs_pioasm = pytest.mark.skipif(PIOASM is None, reason="pioasm not found (set PIOASM)")
+needs_pioasm = unittest.skipIf(PIOASM is None, reason="pioasm not found (set PIOASM)")
 
 
 def assemble(text, tmp_path, version=1, name="p.pio"):
@@ -133,23 +133,25 @@ def build_batches(version, chip):
     return progs
 
 
-@needs_pioasm
-@pytest.mark.parametrize("version,chip", [(0, "rp2040"), (1, "rp2350")])
-def test_every_form_encodes_like_pioasm(tmp_path, version, chip):
-    progs = build_batches(version, chip)
-    for p in progs:
-        assert len(p._instrs) <= 32
-    text = "\n".join(p.pio_text() for p in progs)
-    rc, err, got = assemble(text, tmp_path, version=version)
-    assert rc == 0, err[:2000]
-    assert [g["name"] for g in got] == [p.name for p in progs]
-    total = 0
-    for p, g in zip(progs, got):
-        mine = p.words()
-        theirs = words_of(g)
-        assert mine == theirs, "%s: %s" % (p.name, [(i, hex(a), hex(b)) for i, (a, b) in enumerate(zip(mine, theirs)) if a != b][:5])
-        total += len(mine)
-    assert total > 1000 if version else total > 800
+@support.cases
+class PioasmEncodingTests(support.TestCase):
+    @needs_pioasm
+    @support.parametrize("version,chip", [(0, "rp2040"), (1, "rp2350")])
+    def test_every_form_encodes_like_pioasm(self, version, chip):
+        progs = build_batches(version, chip)
+        for p in progs:
+            self.assertLessEqual(len(p._instrs), 32)
+        text = "\n".join(p.pio_text() for p in progs)
+        rc, err, got = assemble(text, self.tmp_path, version=version)
+        self.assertEqual(rc, 0, err[:2000])
+        self.assertEqual([g["name"] for g in got], [p.name for p in progs])
+        total = 0
+        for p, g in zip(progs, got):
+            mine = p.words()
+            theirs = words_of(g)
+            self.assertEqual(mine, theirs, "%s: %s" % (p.name, [(i, hex(a), hex(b)) for i, (a, b) in enumerate(zip(mine, theirs)) if a != b][:5]))
+            total += len(mine)
+        self.assertTrue(total > 1000 if version else total > 800)
 
 
 # ----------------------------------------------------------------------------- the version gate agrees with pioasm
@@ -163,86 +165,108 @@ V1_ONLY = [
 ]
 
 
-@pytest.mark.parametrize("label,fn", V1_ONLY, ids=[x[0] for x in V1_ONLY])
-def test_version_one_forms_are_refused_on_the_rp2040(label, fn):
-    with pytest.raises(PioError, match="PIO version 1|RP2350"):
-        fn(Program("v", chip="rp2040"))
-    fn(Program("v", chip="rp2350"))
-    fn(Program("v", chip="rp2354"))
+@support.cases
+class BuilderTests(support.TestCase):
+    @support.parametrize("label,fn", V1_ONLY, ids=[x[0] for x in V1_ONLY])
+    def test_version_one_forms_are_refused_on_the_rp2040(self, label, fn):
+        with self.assertRaisesRegex(PioError, "PIO version 1|RP2350"):
+            fn(Program("v", chip="rp2040"))
+        fn(Program("v", chip="rp2350"))
+        fn(Program("v", chip="rp2354"))
 
+    @needs_pioasm
+    @support.parametrize("label,fn", V1_ONLY, ids=[x[0] for x in V1_ONLY])
+    def test_pioasm_refuses_the_same_forms_for_version_zero(self, label, fn):
+        p = Program("v", chip="rp2350")
+        fn(p)
+        rc, err, _ = assemble(p.pio_text().replace(".pio_version 1", ".pio_version 0"), self.tmp_path, version=0)
+        self.assertTrue(rc != 0 and "version" in err.lower(), err)
 
-@needs_pioasm
-@pytest.mark.parametrize("label,fn", V1_ONLY, ids=[x[0] for x in V1_ONLY])
-def test_pioasm_refuses_the_same_forms_for_version_zero(tmp_path, label, fn):
-    p = Program("v", chip="rp2350")
-    fn(p)
-    rc, err, _ = assemble(p.pio_text().replace(".pio_version 1", ".pio_version 0"), tmp_path, version=0)
-    assert rc != 0 and "version" in err.lower(), err
+    # ----------------------------------------------------------------------------- the example programs equal the hand-written .pio files
+    @needs_pioasm
+    @support.parametrize("name", sorted(pio_examples.PROGRAMS))
+    def test_examples_equal_the_hand_written_programs(self, name):
+        prog = pio_examples.PROGRAMS[name]()
+        with open(os.path.join(HERE, "pio_ref", name + ".pio")) as fh:
+            ref = fh.read()
+        rc, err, ref_prog = assemble(ref, self.tmp_path, version=prog.version, name="ref.pio")
+        self.assertEqual(rc, 0, err)
+        rc, err, dsl_prog = assemble(prog.pio_text(), self.tmp_path, version=prog.version, name="dsl.pio")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(words_of(dsl_prog[0]) == words_of(ref_prog[0]) == prog.words())
+        for key in ("wrapTarget", "wrap", "sideset", "origin", "pioVersion"):
+            self.assertEqual(dsl_prog[0][key], ref_prog[0][key], key)
+        self.assertEqual(prog.wrap_range, (dsl_prog[0]["wrapTarget"], dsl_prog[0]["wrap"]))
 
+    @needs_pioasm
+    def test_wait_gpio_numbers_up_to_47_like_pioasm(self):
+        p = Program("hi", chip="rp2350b")
+        for g in (16, 20, 31, 32, 35, 47):
+            p.wait_gpio(1, g)
+            p.wait_gpio(0, g, delay=1)
+        rc, err_, got = assemble(p.pio_text(), self.tmp_path)
+        self.assertEqual(rc, 0, err_)
+        self.assertEqual(p.words(), words_of(got[0]))
+        self.assertTrue(max(p.words()) > 0xFFFF and got[0]["usedGPIORanges"] == 6)
+        # below 16 together with above 31 does not fit one window; the rule is pioasm's and the DSL's
+        q = Program("mix", chip="rp2350b")
+        q.wait_gpio(1, 3)
+        q.wait_gpio(1, 40)
+        rc, err_, _ = assemble(".program mix\n.pio_version 1\n    wait 1 gpio 3\n    wait 1 gpio 40\n", self.tmp_path, name="q.pio")
+        self.assertTrue(rc != 0 and "already been used" in err_)
+        with self.assertRaisesRegex(PioError, "below 16 and above 31"):
+            q.words()
+        # GPIO above 31 needs version 1
+        with self.assertRaisesRegex(PioError, "GPIO number"):
+            Program("v0", chip="rp2040").wait_gpio(1, 32)
+        for chip in ("rp2350a", "rp2350b", "rp2354a", "rp2354b"):
+            self.assertEqual(Program("c", chip=chip).version, 1)
 
-# ----------------------------------------------------------------------------- the example programs equal the hand-written .pio files
-@needs_pioasm
-@pytest.mark.parametrize("name", sorted(pio_examples.PROGRAMS))
-def test_examples_equal_the_hand_written_programs(tmp_path, name):
-    prog = pio_examples.PROGRAMS[name]()
-    with open(os.path.join(HERE, "pio_ref", name + ".pio")) as fh:
-        ref = fh.read()
-    rc, err, ref_prog = assemble(ref, tmp_path, version=prog.version, name="ref.pio")
-    assert rc == 0, err
-    rc, err, dsl_prog = assemble(prog.pio_text(), tmp_path, version=prog.version, name="dsl.pio")
-    assert rc == 0, err
-    assert words_of(dsl_prog[0]) == words_of(ref_prog[0]) == prog.words()
-    for key in ("wrapTarget", "wrap", "sideset", "origin", "pioVersion"):
-        assert dsl_prog[0][key] == ref_prog[0][key], key
-    assert prog.wrap_range == (dsl_prog[0]["wrapTarget"], dsl_prog[0]["wrap"])
+    def test_example_words_from_hand_derivation(self):
+        # square: set pins,1 [1] = 0xE101 ; set pins,0 [1] = 0xE100
+        self.assertEqual(pio_examples.square().words(), [0xE101, 0xE100])
+        # uart_tx: pull block side 1 [7] ; set x,7 side 0 [7] ; out pins,1 ; jmp x-- 2 [6]  (side-set 1 bit + enable bit, 3 delay bits)
+        self.assertEqual(pio_examples.uart_tx().words(), [0x9FA0, 0xF727, 0x6001, 0x0642])
+        self.assertEqual(pio_examples.passthru().words(), [0x6020, 0x4020])
 
+    def test_examples_run_on_the_rp2350_too(self):
+        for f in pio_examples.PROGRAMS.values():
+            self.assertEqual(f(chip="rp2350").words(), f(chip="rp2040").words())
 
-@needs_pioasm
-def test_wait_gpio_numbers_up_to_47_like_pioasm(tmp_path):
-    p = Program("hi", chip="rp2350b")
-    for g in (16, 20, 31, 32, 35, 47):
-        p.wait_gpio(1, g)
-        p.wait_gpio(0, g, delay=1)
-    rc, err_, got = assemble(p.pio_text(), tmp_path)
-    assert rc == 0, err_
-    assert p.words() == words_of(got[0])
-    assert max(p.words()) > 0xFFFF and got[0]["usedGPIORanges"] == 6
-    # below 16 together with above 31 does not fit one window; the rule is pioasm's and the DSL's
-    q = Program("mix", chip="rp2350b")
-    q.wait_gpio(1, 3)
-    q.wait_gpio(1, 40)
-    rc, err_, _ = assemble(".program mix\n.pio_version 1\n    wait 1 gpio 3\n    wait 1 gpio 40\n", tmp_path, name="q.pio")
-    assert rc != 0 and "already been used" in err_
-    with pytest.raises(PioError, match="below 16 and above 31"):
-        q.words()
-    # GPIO above 31 needs version 1
-    with pytest.raises(PioError, match="GPIO number"):
-        Program("v0", chip="rp2040").wait_gpio(1, 32)
-    for chip in ("rp2350a", "rp2350b", "rp2354a", "rp2354b"):
-        assert Program("c", chip=chip).version == 1
+    # ----------------------------------------------------------------------------- structure, directives, determinism
+    def test_text_is_deterministic_and_has_the_structure(self):
+        def build():
+            p = Program("demo", chip="rp2350", side_set=1, side_opt=True, origin=0)
+            p.define("N", 5, public=True)
+            p.clock_divider(2.5)
+            p.fifo("putget")
+            p.mov_status("rxfifo", 2)
+            p.config_in(8, "left")
+            p.config_out(8, "right", auto=True)
+            p.config_set(3)
+            p.label("top")
+            p.wrap_target()
+            p.set(X, 4, side=1)
+            p.jmp("top", when=X_DEC, delay=2)
+            p.wrap()
+            p.nop()
+            return p
+        a, b = build(), build()
+        self.assertEqual(a.pio_text(), b.pio_text())
+        t = a.pio_text()
+        for want in (".program demo", ".pio_version 1", ".define PUBLIC N 5", ".origin 0", ".clock_div 2.5", ".fifo putget", ".mov_status rxfifo < 2", ".in 8 left\n",
+                     ".out 8 right auto", ".set 3", ".side_set 1 opt", "top:", ".wrap_target", ".wrap\n", "jmp x-- top [2]", "set x, 4 side 1"):
+            self.assertIn(want, t, want)
+        self.assertTrue(t.index(".wrap_target") < t.index("top:") < t.index("set x"))
+        self.assertEqual(a.wrap_range, (0, 1))
 
-
-def test_example_words_from_hand_derivation():
-    # square: set pins,1 [1] = 0xE101 ; set pins,0 [1] = 0xE100
-    assert pio_examples.square().words() == [0xE101, 0xE100]
-    # uart_tx: pull block side 1 [7] ; set x,7 side 0 [7] ; out pins,1 ; jmp x-- 2 [6]  (side-set 1 bit + enable bit, 3 delay bits)
-    assert pio_examples.uart_tx().words() == [0x9FA0, 0xF727, 0x6001, 0x0642]
-    assert pio_examples.passthru().words() == [0x6020, 0x4020]
-
-
-def test_examples_run_on_the_rp2350_too():
-    for f in pio_examples.PROGRAMS.values():
-        assert f(chip="rp2350").words() == f(chip="rp2040").words()
-
-
-# ----------------------------------------------------------------------------- structure, directives, determinism
-def test_text_is_deterministic_and_has_the_structure():
-    def build():
+    @needs_pioasm
+    def test_directives_are_accepted_by_pioasm(self):
         p = Program("demo", chip="rp2350", side_set=1, side_opt=True, origin=0)
         p.define("N", 5, public=True)
         p.clock_divider(2.5)
         p.fifo("putget")
-        p.mov_status("rxfifo", 2)
+        p.mov_status("irq", 2)
         p.config_in(8, "left")
         p.config_out(8, "right", auto=True)
         p.config_set(3)
@@ -252,213 +276,179 @@ def test_text_is_deterministic_and_has_the_structure():
         p.jmp("top", when=X_DEC, delay=2)
         p.wrap()
         p.nop()
-        return p
-    a, b = build(), build()
-    assert a.pio_text() == b.pio_text()
-    t = a.pio_text()
-    for want in (".program demo", ".pio_version 1", ".define PUBLIC N 5", ".origin 0", ".clock_div 2.5", ".fifo putget", ".mov_status rxfifo < 2", ".in 8 left\n",
-                 ".out 8 right auto", ".set 3", ".side_set 1 opt", "top:", ".wrap_target", ".wrap\n", "jmp x-- top [2]", "set x, 4 side 1"):
-        assert want in t, want
-    assert t.index(".wrap_target") < t.index("top:") < t.index("set x")
-    assert a.wrap_range == (0, 1)
+        rc, err, got = assemble(p.pio_text(), self.tmp_path)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(words_of(got[0]), p.words())
+        self.assertEqual((got[0]["wrapTarget"], got[0]["wrap"]), p.wrap_range)
 
+    @needs_pioasm
+    def test_origin_makes_jump_targets_absolute(self):
+        p = Program("org", origin=4)
+        p.label("a")
+        p.set(X, 1)
+        p.jmp("a")
+        rc, err, got = assemble(p.pio_text(), self.tmp_path, version=0)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(p.words(), words_of(got[0]))
+        self.assertEqual(p.words()[1] & 31, 0)     # pioasm writes program-relative targets; the SDK adds the load offset (4)
 
-@needs_pioasm
-def test_directives_are_accepted_by_pioasm(tmp_path):
-    p = Program("demo", chip="rp2350", side_set=1, side_opt=True, origin=0)
-    p.define("N", 5, public=True)
-    p.clock_divider(2.5)
-    p.fifo("putget")
-    p.mov_status("irq", 2)
-    p.config_in(8, "left")
-    p.config_out(8, "right", auto=True)
-    p.config_set(3)
-    p.label("top")
-    p.wrap_target()
-    p.set(X, 4, side=1)
-    p.jmp("top", when=X_DEC, delay=2)
-    p.wrap()
-    p.nop()
-    rc, err, got = assemble(p.pio_text(), tmp_path)
-    assert rc == 0, err
-    assert words_of(got[0]) == p.words()
-    assert (got[0]["wrapTarget"], got[0]["wrap"]) == p.wrap_range
+    @needs_pioasm
+    def test_write_pio_holds_several_programs(self):
+        path = self.tmp_path / "two.pio"
+        write_pio([pio_examples.square(), pio_examples.passthru()], str(path))
+        rc, err, got = assemble(path.read_text(), self.tmp_path, version=0, name="two2.pio")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([g["name"] for g in got], ["square", "passthru"])
 
-
-@needs_pioasm
-def test_origin_makes_jump_targets_absolute(tmp_path):
-    p = Program("org", origin=4)
-    p.label("a")
-    p.set(X, 1)
-    p.jmp("a")
-    rc, err, got = assemble(p.pio_text(), tmp_path, version=0)
-    assert rc == 0, err
-    assert p.words() == words_of(got[0])
-    assert p.words()[1] & 31 == 0     # pioasm writes program-relative targets; the SDK adds the load offset (4)
-
-
-@needs_pioasm
-def test_write_pio_holds_several_programs(tmp_path):
-    path = tmp_path / "two.pio"
-    write_pio([pio_examples.square(), pio_examples.passthru()], str(path))
-    rc, err, got = assemble(path.read_text(), tmp_path, version=0, name="two2.pio")
-    assert rc == 0, err
-    assert [g["name"] for g in got] == ["square", "passthru"]
-
-
-def test_emit_script_prints_the_generator_line(tmp_path):
-    r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "square", str(tmp_path)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    line = [l for l in r.stdout.splitlines() if l.startswith("EMIT ")][-1]
-    path = json.loads(line[5:])["path"]
-    with open(path) as fh:
-        assert fh.read() == pio_examples.square().pio_text()
-    for bad in (["nope", str(tmp_path)], []):
-        r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit"] + bad, capture_output=True, text=True)
-        assert r.returncode != 0
-    r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "uart_tx", str(tmp_path), "rp2040"], capture_output=True, text=True)
-    assert r.returncode == 0 and "uart_tx.pio" in r.stdout
+    def test_emit_script_prints_the_generator_line(self):
+        r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "square", str(self.tmp_path)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = [l for l in r.stdout.splitlines() if l.startswith("EMIT ")][-1]
+        path = json.loads(line[5:])["path"]
+        with open(path) as fh:
+            self.assertEqual(fh.read(), pio_examples.square().pio_text())
+        for bad in (["nope", str(self.tmp_path)], []):
+            r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit"] + bad, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+        r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "uart_tx", str(self.tmp_path), "rp2040"], capture_output=True, text=True)
+        self.assertTrue(r.returncode == 0 and "uart_tx.pio" in r.stdout)
 
 
 # ----------------------------------------------------------------------------- errors are raised when the program is built
-def err(fn, match):
-    with pytest.raises(PioError, match=match):
-        fn()
+@support.cases
+class ProgramLevelTests(support.TestCase):
+    def err(self, fn, match):
+        with self.assertRaisesRegex(PioError, match):
+            fn()
 
+    def test_program_level_errors(self):
+        self.err(lambda: Program("1bad"), "program name")
+        self.err(lambda: Program(""), "program name")
+        self.err(lambda: Program("x", chip="avr"), "chip")
+        self.err(lambda: Program("x", side_set=6), "side_set")
+        self.err(lambda: Program("x", side_set=5, side_opt=True), "enable bit")
+        self.err(lambda: Program("x", side_opt=True), "side_set >= 1")
+        self.err(lambda: Program("x", origin=32), "origin")
+        p = Program("x")
+        self.err(p._resolve, "no instructions")
 
-def test_program_level_errors():
-    err(lambda: Program("1bad"), "program name")
-    err(lambda: Program(""), "program name")
-    err(lambda: Program("x", chip="avr"), "chip")
-    err(lambda: Program("x", side_set=6), "side_set")
-    err(lambda: Program("x", side_set=5, side_opt=True), "enable bit")
-    err(lambda: Program("x", side_opt=True), "side_set >= 1")
-    err(lambda: Program("x", origin=32), "origin")
-    p = Program("x")
-    err(p._resolve, "no instructions")
+    def test_instruction_argument_errors(self):
+        p = Program("x")
+        self.err(lambda: p.set(X, 32), "set value")
+        self.err(lambda: p.set(NULL, 1), "set destination")
+        self.err(lambda: p.in_(PINDIRS, 1), "in source")
+        self.err(lambda: p.in_(X, 0), "in bit count")
+        self.err(lambda: p.in_(X, 33), "in bit count")
+        self.err(lambda: p.out(STATUS, 1), "out destination")
+        self.err(lambda: p.mov(NULL, X), "mov destination")
+        self.err(lambda: p.mov(X, EXEC), "mov source")
+        self.err(lambda: p.mov(X, Y, op="x"), "mov operation")
+        self.err(lambda: p.jmp("a", when="x"), "jmp condition")
+        self.err(lambda: p.jmp(3.5), "jmp target")
+        self.err(lambda: p.jmp(32), "jmp address")
+        self.err(lambda: p.wait_gpio(2, 1), "polarity")
+        self.err(lambda: p.wait_gpio(1, 32), "GPIO")
+        self.err(lambda: p.wait_irq(1, 8), "IRQ flag")
+        self.err(lambda: p.irq(1, "set"), "irq mode")
+        self.err(lambda: p.irq(9), "IRQ flag")
+        self.err(lambda: p.nop(delay=32), "delay")
+        self.err(lambda: p.nop(side=1), "side_set=0")
+        self.err(lambda: p.nop(delay=True), "delay")
+        self.err(lambda: p.word(0x10000), "word")
+        q = Program("q", chip="rp2350")
+        self.err(lambda: q.wait_jmppin(1, 4), "jmppin offset")
+        self.err(lambda: q.mov_put(0), "needs fifo")
+        q.fifo("putget")
+        self.err(lambda: q.mov_put(4), "rxfifo index")
+        self.err(lambda: q.push(), "push needs fifo")
+        q.nop()
+        self.err(lambda: q.fifo("tx"), "before the first instruction")
+        self.err(lambda: q.irq(1, SET, rel=True, other="next"), "rel is not supported")
+        self.err(lambda: q.irq(1, SET, other="left"), "prev")
+        self.err(lambda: q.wait_irq(1, 1, rel=True, other="prev"), "rel is not supported")
 
-
-def test_instruction_argument_errors():
-    p = Program("x")
-    err(lambda: p.set(X, 32), "set value")
-    err(lambda: p.set(NULL, 1), "set destination")
-    err(lambda: p.in_(PINDIRS, 1), "in source")
-    err(lambda: p.in_(X, 0), "in bit count")
-    err(lambda: p.in_(X, 33), "in bit count")
-    err(lambda: p.out(STATUS, 1), "out destination")
-    err(lambda: p.mov(NULL, X), "mov destination")
-    err(lambda: p.mov(X, EXEC), "mov source")
-    err(lambda: p.mov(X, Y, op="x"), "mov operation")
-    err(lambda: p.jmp("a", when="x"), "jmp condition")
-    err(lambda: p.jmp(3.5), "jmp target")
-    err(lambda: p.jmp(32), "jmp address")
-    err(lambda: p.wait_gpio(2, 1), "polarity")
-    err(lambda: p.wait_gpio(1, 32), "GPIO")
-    err(lambda: p.wait_irq(1, 8), "IRQ flag")
-    err(lambda: p.irq(1, "set"), "irq mode")
-    err(lambda: p.irq(9), "IRQ flag")
-    err(lambda: p.nop(delay=32), "delay")
-    err(lambda: p.nop(side=1), "side_set=0")
-    err(lambda: p.nop(delay=True), "delay")
-    err(lambda: p.word(0x10000), "word")
-    q = Program("q", chip="rp2350")
-    err(lambda: q.wait_jmppin(1, 4), "jmppin offset")
-    err(lambda: q.mov_put(0), "needs fifo")
-    q.fifo("putget")
-    err(lambda: q.mov_put(4), "rxfifo index")
-    err(lambda: q.push(), "push needs fifo")
-    q.nop()
-    err(lambda: q.fifo("tx"), "before the first instruction")
-    err(lambda: q.irq(1, SET, rel=True, other="next"), "rel is not supported")
-    err(lambda: q.irq(1, SET, other="left"), "prev")
-    err(lambda: q.wait_irq(1, 1, rel=True, other="prev"), "rel is not supported")
-
-
-def test_side_set_rules():
-    m = Program("m", side_set=2)
-    err(lambda: m.nop(), "mandatory side-set")
-    err(lambda: m.nop(side=4), "side")
-    err(lambda: m.nop(side=1, delay=8), "delay")     # 5 - 2 = 3 delay bits
-    m.nop(side=3, delay=7)
-    o = Program("o", side_set=2, side_opt=True)
-    o.nop()
-    err(lambda: o.nop(delay=4), "delay")             # 5 - 2 - 1 = 2 delay bits
-    o.nop(side=3, delay=3)
-    full = Program("f", side_set=5)
-    err(lambda: full.nop(side=0, delay=1), "delay")
-
-
-def test_label_wrap_and_size_errors():
-    p = Program("x")
-    err(lambda: p.label("1a"), "label")
-    p.label("a")
-    err(lambda: p.label("a"), "twice")
-    err(p._resolve, "past the last instruction")
-    p.nop()
-    p.jmp("missing")
-    err(p._resolve, "undefined label")
-    q = Program("q")
-    err(q.wrap, "needs an instruction")
-    q.wrap_target()
-    err(q.wrap_target, "only once")
-    err(q._resolve, "past the last instruction")
-    q.nop()
-    q.wrap()
-    err(q.wrap, "only once")
-    r = Program("r")
-    for _ in range(32):
-        r.nop()
-    err(r.nop, "32 words")
-    o = Program("o", origin=30)
-    for _ in range(3):
+    def test_side_set_rules(self):
+        m = Program("m", side_set=2)
+        self.err(lambda: m.nop(), "mandatory side-set")
+        self.err(lambda: m.nop(side=4), "side")
+        self.err(lambda: m.nop(side=1, delay=8), "delay")     # 5 - 2 = 3 delay bits
+        m.nop(side=3, delay=7)
+        o = Program("o", side_set=2, side_opt=True)
         o.nop()
-    err(o._resolve, "does not fit")
-    far = Program("far", origin=31)
-    far.nop()
-    far.label("end")
-    far.nop()
-    far.jmp("end")
-    err(far._resolve, "does not fit|beyond")
+        self.err(lambda: o.nop(delay=4), "delay")             # 5 - 2 - 1 = 2 delay bits
+        o.nop(side=3, delay=3)
+        full = Program("f", side_set=5)
+        self.err(lambda: full.nop(side=0, delay=1), "delay")
 
+    def test_label_wrap_and_size_errors(self):
+        p = Program("x")
+        self.err(lambda: p.label("1a"), "label")
+        p.label("a")
+        self.err(lambda: p.label("a"), "twice")
+        self.err(p._resolve, "past the last instruction")
+        p.nop()
+        p.jmp("missing")
+        self.err(p._resolve, "undefined label")
+        q = Program("q")
+        self.err(q.wrap, "needs an instruction")
+        q.wrap_target()
+        self.err(q.wrap_target, "only once")
+        self.err(q._resolve, "past the last instruction")
+        q.nop()
+        q.wrap()
+        self.err(q.wrap, "only once")
+        r = Program("r")
+        for _ in range(32):
+            r.nop()
+        self.err(r.nop, "32 words")
+        o = Program("o", origin=30)
+        for _ in range(3):
+            o.nop()
+        self.err(o._resolve, "does not fit")
+        far = Program("far", origin=31)
+        far.nop()
+        far.label("end")
+        far.nop()
+        far.jmp("end")
+        self.err(far._resolve, "does not fit|beyond")
 
-def test_directive_errors():
-    p = Program("x", chip="rp2040")
-    err(lambda: p.fifo("putget"), "fifo")
-    err(lambda: p.fifo("bogus"), "fifo")
-    p.fifo("tx")
-    err(lambda: p.mov_status("irq", 1), "version 1")
-    err(lambda: p.mov_status("bogus", 1), "kind")
-    err(lambda: p.mov_status("rxfifo", 16), "level")
-    err(lambda: p.config_in(8), "must be 32")
-    p.config_in(32, "left", auto=True, threshold=16)
-    err(lambda: p.config_out(32, threshold=4), "auto = True")
-    err(lambda: p.config_out(32, direction="up"), "direction")
-    err(lambda: p.config_set(6), ".set count")
-    err(lambda: p.clock_divider(0), "clock divider")
-    err(lambda: p.define("1x", 1), "symbol")
-    err(lambda: p.define("x", 1.5), "define value")
-    q = Program("q", chip="rp2350")
-    q.mov_status("irq", 1, which="next")
-    err(lambda: q.mov_status("irq", 1, which="far"), "which")
-    err(lambda: q.mov_status("irq", 9), "irq flag")
-    q.config_in(8)
-    q.fifo("txget")
-    q.nop()
-    assert ".mov_status irq next set 1" in q.pio_text()
-    for late in (lambda: q.fifo("tx"), lambda: q.config_set(1), lambda: q.config_out(8), lambda: q.clock_divider(2), lambda: q.mov_status("rxfifo", 1)):
-        err(late, "before the first instruction")
-    a = Program("a", chip="rp2350")
-    a.fifo("putget")
-    a.config_in(8, auto=True)
-    a.nop()
-    err(a.pio_text, "incompatible")
-    err(lambda: Program("w", side_set=1).word(1), "mandatory side-set")
+    def test_directive_errors(self):
+        p = Program("x", chip="rp2040")
+        self.err(lambda: p.fifo("putget"), "fifo")
+        self.err(lambda: p.fifo("bogus"), "fifo")
+        p.fifo("tx")
+        self.err(lambda: p.mov_status("irq", 1), "version 1")
+        self.err(lambda: p.mov_status("bogus", 1), "kind")
+        self.err(lambda: p.mov_status("rxfifo", 16), "level")
+        self.err(lambda: p.config_in(8), "must be 32")
+        p.config_in(32, "left", auto=True, threshold=16)
+        self.err(lambda: p.config_out(32, threshold=4), "auto = True")
+        self.err(lambda: p.config_out(32, direction="up"), "direction")
+        self.err(lambda: p.config_set(6), ".set count")
+        self.err(lambda: p.clock_divider(0), "clock divider")
+        self.err(lambda: p.define("1x", 1), "symbol")
+        self.err(lambda: p.define("x", 1.5), "define value")
+        q = Program("q", chip="rp2350")
+        q.mov_status("irq", 1, which="next")
+        self.err(lambda: q.mov_status("irq", 1, which="far"), "which")
+        self.err(lambda: q.mov_status("irq", 9), "irq flag")
+        q.config_in(8)
+        q.fifo("txget")
+        q.nop()
+        self.assertIn(".mov_status irq next set 1", q.pio_text())
+        for late in (lambda: q.fifo("tx"), lambda: q.config_set(1), lambda: q.config_out(8), lambda: q.clock_divider(2), lambda: q.mov_status("rxfifo", 1)):
+            self.err(late, "before the first instruction")
+        a = Program("a", chip="rp2350")
+        a.fifo("putget")
+        a.config_in(8, auto=True)
+        a.nop()
+        self.err(a.pio_text, "incompatible")
+        self.err(lambda: Program("w", side_set=1).word(1), "mandatory side-set")
 
-
-def test_jump_targets_are_program_relative():
-    p = Program("rel", origin=4)
-    p.label("a")
-    p.set(X, 1)
-    p.jmp("a")
-    assert p.words()[1] & 31 == 0
-    assert p.wrap_range == (0, 1)
+    def test_jump_targets_are_program_relative(self):
+        p = Program("rel", origin=4)
+        p.label("a")
+        p.set(X, 1)
+        p.jmp("a")
+        self.assertEqual(p.words()[1] & 31, 0)
+        self.assertEqual(p.wrap_range, (0, 1))

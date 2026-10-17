@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 
-import pytest
+from . import support
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.S | re.M)
@@ -19,12 +19,13 @@ def blocks(path):
 
 
 def python_blocks():
-    out = []
+    out, ids = [], []
     for path in [os.path.join(ROOT, "README.md")] + sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
         for lang, body, line in blocks(path):
             if lang == "python" and re.match(r"(from|import) ", body):
-                out.append(pytest.param(path, body, id="%s:%d" % (os.path.relpath(path, ROOT), line)))
-    return out
+                out.append((path, body))
+                ids.append("%s_%d" % (os.path.relpath(path, ROOT), line))
+    return out, ids
 
 
 def run_block(body, cwd):
@@ -33,9 +34,11 @@ def run_block(body, cwd):
     return r
 
 
-@pytest.mark.parametrize("path,body", python_blocks())
-def test_every_self_contained_python_block_runs(path, body, tmp_path):
-    run_block(body, str(tmp_path))
+@support.cases
+class DocsCodeTests(support.TestCase):
+    @support.parametrize("path,body", python_blocks()[0], ids=python_blocks()[1])
+    def test_every_self_contained_python_block_runs(self, path, body):
+        run_block(body, str(self.tmp_path))
 
 
 def shown_pio(path, after):
@@ -47,12 +50,14 @@ def shown_pio(path, after):
     return m.group(1)
 
 
-def test_the_pio_programs_shown_are_what_the_examples_write(tmp_path):
-    readme = os.path.join(ROOT, "README.md")
-    py = [b for lang, b, _ in blocks(readme) if lang == "python"][0]
-    run_block(py, str(tmp_path))
-    assert shown_pio(readme, "This compiles to").strip() == (tmp_path / "build" / "uart_tx" / "uart_tx.pio").read_text().replace(".pio_version 0\n", "").strip()
-    start = os.path.join(ROOT, "docs", "getting-started.md")
-    py = [b for lang, b, _ in blocks(start) if lang == "python"][0]
-    run_block(py, str(tmp_path))
-    assert shown_pio(start, "This writes `build/blink/blink.pio`").strip() == (tmp_path / "build" / "blink" / "blink.pio").read_text().strip()
+@support.cases
+class DocsOutputTests(support.TestCase):
+    def test_the_pio_programs_shown_are_what_the_examples_write(self):
+        readme = os.path.join(ROOT, "README.md")
+        py = [b for lang, b, _ in blocks(readme) if lang == "python"][0]
+        run_block(py, str(self.tmp_path))
+        self.assertEqual(shown_pio(readme, "This compiles to").strip(), (self.tmp_path / "build" / "uart_tx" / "uart_tx.pio").read_text().replace(".pio_version 0\n", "").strip())
+        start = os.path.join(ROOT, "docs", "getting-started.md")
+        py = [b for lang, b, _ in blocks(start) if lang == "python"][0]
+        run_block(py, str(self.tmp_path))
+        self.assertEqual(shown_pio(start, "This writes `build/blink/blink.pio`").strip(), (self.tmp_path / "build" / "blink" / "blink.pio").read_text().strip())

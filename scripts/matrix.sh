@@ -18,17 +18,17 @@ for v in "$@"; do
   d=$(mktemp -d)
   echo "== amaranth $v"
   python3 -m venv "$d/venv" && case "$v" in
-    git:*) "$d/venv/bin/pip" install -q pytest "git+https://github.com/amaranth-lang/amaranth.git@${v#git:}" 2>&1 | tail -2 ;;
-    *) "$d/venv/bin/pip" install -q "amaranth==$v" pytest 2>&1 | tail -2 ;;
+    git:*) "$d/venv/bin/pip" install -q "git+https://github.com/amaranth-lang/amaranth.git@${v#git:}" 2>&1 | tail -2 ;;
+    *) "$d/venv/bin/pip" install -q "amaranth==$v" 2>&1 | tail -2 ;;
   esac
   # --no-deps: pip would refuse a version outside the declared range; this shows what the version gate says
   "$d/venv/bin/pip" install -q --no-deps -e . 2>&1 | tail -2
   if "$d/venv/bin/python" -W error -c "import pioweave" 2>"$d/err.txt"; then
     if [ "${MATRIX_QUICK:-0}" = 1 ]; then
-      "$d/venv/bin/python" -m pytest -q -W error tests/test_refusals.py tests/test_program.py tests/test_boards.py -p no:cacheprovider 2>&1 | tail -2
-      "$d/venv/bin/python" -m pytest -q -W error tests/test_compile.py -k same_on_every -p no:cacheprovider 2>&1 | tail -1
+      PYTHONWARNINGS=error "$d/venv/bin/python" -m unittest tests.test_refusals tests.test_program tests.test_boards 2>&1 | tail -3
+      PYTHONWARNINGS=error "$d/venv/bin/python" -m unittest tests.test_compile.DataPathTests.test_example_programs_are_the_same_on_every_amaranth_version 2>&1 | tail -3
     else
-      "$d/venv/bin/python" -m pytest -q -W error tests -p no:cacheprovider 2>&1 | tail -3
+      PYTHONWARNINGS=error "$d/venv/bin/python" -m unittest discover -t . -s tests 2>&1 | tail -3
     fi
   else
     echo "refused: $(tail -1 "$d/err.txt")"
