@@ -2,9 +2,15 @@
 requires = ["pdm-backend>=2.4"]
 build-backend = "pdm.backend"
 
+# Project metadata
+
+[tool.pdm.version]
+source = "scm"
+
 [project]
+dynamic = ["version"]
+
 name = "pioweave"
-version = "0.1.0"
 description = "Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python or Amaranth, emulate them, and generate projects: builder, platforms and compiler, emulator, board definitions"
 readme = "README.md"
 requires-python = "~=3.9"

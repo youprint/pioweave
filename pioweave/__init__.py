@@ -12,8 +12,13 @@ project="pio" | "pico-c" | "micropython")` compiles it to PIO instructions and w
 The public names load on first use (PEP 562, as amaranth.vendor does), so `import pioweave.builder` does not import Amaranth.
 """
 import importlib
+import importlib.metadata
 
-__version__ = "0.1.0"
+# The version comes from the package metadata, which comes from the git tag (pdm-backend, source = "scm"), as in amaranth-soc.
+try:
+    __version__ = importlib.metadata.version(__package__)
+except importlib.metadata.PackageNotFoundError:     # not installed with pip (running from a source tree)
+    __version__ = "unknown"
 
 _NAMES = {
     "UnsupportedAmaranth": "_compat", "check_version": "_compat",
