@@ -299,7 +299,7 @@ def _c_sm_config(compiled, platform, name):
     # X, Y and the OSR are not cleared by pio_sm_init / pio_sm_restart (Pico SDK pio_sm_restart: "Not affected: ... the contents of its output shift register, and its X and Y
     # scratch registers"; RP2040 datasheet CTRL SM_RESTART p.372), the ISR is, but the reference simulation starts all four at 0, so the glue clears them first. The forced
     # instructions run while the machine is disabled, ignoring the clock divider (RP2040 3.5.7 p.343-344), with the default configuration (no side-set: a forced instruction
-    # would drive a mandatory side-set field), and a restart then puts the shift counters back to "ISR empty, OSR exhausted" (3.5.4 p.316), which MOV OSR / MOV ISR changed.
+    # would drive a mandatory side-set field), and a restart then puts the shift counters back to "ISR empty, OSR exhausted" (3.5.4 p.338), which MOV OSR / MOV ISR changed.
     lines = ["    {   // zero X, Y, ISR and OSR as the reference simulation starts them (COR-01)",
              "        pio_sm_set_enabled(pio, sm, false);",
              "        pio_sm_config zero_config = pio_get_default_sm_config();",

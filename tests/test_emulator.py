@@ -488,7 +488,7 @@ class EmulatorTests(support.TestCase):
 
 @support.cases
 class RestartTests(support.TestCase):
-    """COR-01: SM_RESTART. Expected values from the RP2040 datasheet, CTRL register field SM_RESTART (p.372) and 3.5.4 (p.316), not from the code under test: a restart clears the input
+    """COR-01: SM_RESTART. Expected values from the RP2040 datasheet, CTRL register field SM_RESTART (p.372) and 3.5.4 (p.338), not from the code under test: a restart clears the input
     and output shift counters, the contents of the ISR, the delay counter, the waiting-on-IRQ state, a stalled forced or EXEC instruction and OUT_STICKY pin writes; it does not
     affect the program counter, the contents of the OSR or the X and Y registers. Power-on values of X and Y are not given by the datasheet (the model starts them at 0)."""
 

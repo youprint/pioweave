@@ -125,10 +125,10 @@ class Config:
         The side-set field: bit count (including the enable bit of an optional side-set), optional, and whether it drives pin directions.
     status_sel : str
         The ``mov status`` source: ``"tx"`` (all-ones if the TX FIFO level is below `status_n`), ``"rx"`` (the RX FIFO level), or on PIO version 1 ``"irq"`` (all-ones if the
-        indexed IRQ flag is raised). RP2040 Table 382 p.377, RP2350 Table 1052 p.857.
+        indexed IRQ flag is raised). RP2040 Table 382 p.376, RP2350 Table 1052 p.856.
     status_n : int
         The level, or the IRQ flag: 0 to 7 for a flag of this block, 8 to 15 for a flag of the next lower-numbered block, 16 to 23 for the next higher-numbered block (RP2350
-        Table 1052 p.857).
+        Table 1052 p.856).
     fifo_join : str
         ``"none"``, ``"tx"`` (TX FIFO 8 deep, RX FIFO unavailable), ``"rx"`` (the reverse), ``"both"`` (both unavailable: FJOIN_TX and FJOIN_RX set, RP2040 3.5.3 p.335); on PIO
         version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
@@ -208,7 +208,7 @@ class StateMachine:
 
     # ------------------------------------------------------------------ host side
     def reset(self):
-        """Return the state machine to the power-on state of the model: PC, X, Y, ISR and OSR 0, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.316: nothing
+        """Return the state machine to the power-on state of the model: PC, X, Y, ISR and OSR 0, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.338: nothing
         shifted in, nothing left to shift out), FIFOs emptied, clock divider restarted, everything else cleared, the state machine disabled.
 
         The datasheets do not state a power-on value for X, Y, the ISR or the OSR (they have no reset value in the register list); the model starts them at 0, as the Amaranth
@@ -384,7 +384,7 @@ class StateMachine:
         return self.rx.pop()
 
     def force(self, word):
-        """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.344, RP2350 11.5.7 p.826): the instruction executes
+        """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.343-344, RP2350 11.5.7 p.825): the instruction executes
         immediately, "ignoring the state machine clock divider" and whether or not the state machine is enabled (it is how the SDK sets a state machine up), its delay cycles
         are ignored, and the program counter does not advance, so the program continues where it left off unless the forced instruction jumps. A forced instruction may stall; it is
         then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it shares the latch of an OUT / MOV EXEC instruction (RP2040 3.5.7 p.344 CAUTION: a forced instruction that stalls overwrites the executee in flight). The model runs a forced instruction that completes
@@ -442,7 +442,7 @@ class StateMachine:
     def _status(self):
         c = self.cfg
         if c.status_sel == "irq":
-            mode, flag = (c.status_n >> 3) & 3, c.status_n & 7           # 0: this block, 1: next lower-numbered block, 2: next higher-numbered (RP2350 Table 1052 p.857)
+            mode, flag = (c.status_n >> 3) & 3, c.status_n & 7           # 0: this block, 1: next lower-numbered block, 2: next higher-numbered (RP2350 Table 1052 p.856)
             if mode == 3:
                 raise EmulationError("STATUS_N 24 to 31 is reserved for an IRQ status")
             block = self.block if mode == 0 else self.block.neighbour(-1 if mode == 1 else 1)
@@ -551,7 +551,7 @@ class StateMachine:
             res = "done" if level == pol else "stall"
         elif op == 2:                                                        # IN
             n = 32 if a & 31 == 0 else a & 31
-            # [verify on a chip] a stalled IN with autopush (RX FIFO full) is modelled as shifting once and retrying only the push; the datasheet pseudocode (RP2040 3.5.4.1 p.337)
+            # [verify on a chip] a stalled IN with autopush (RX FIFO full) is modelled as shifting once and retrying only the push; the datasheet pseudocode (RP2040 3.5.4.1 p.338)
             # does not say whether the retry shifts again (audit COR-09)
             if not self.in_shifted:
                 s = (a >> 5) & 7
@@ -607,7 +607,7 @@ class StateMachine:
         elif op == 4:                                                        # PUSH / PULL (and MOV to / from the RX FIFO registers on version 1)
             if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0:       # bits 7:4 = x001 (RP2350 Table 1027); Index is bits 2:0, IdxI bit 3
                 if not word & 8 and word & 7:
-                    raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.810)")
+                    raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.809)")
                 idx = (word & 3) if word & 8 else (self.y & 3)
                 if not word & 0x80:
                     if c.fifo_join not in ("rx_put", "rx_put_get"):
@@ -774,7 +774,7 @@ class StateMachine:
                     self.side_done, self.in_shifted, self.irq_set_done = self.saved_flags
                     self.saved_flags = None
             else:
-                # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies (RP2040 3.4.5.2 p.327); those of a forced instruction are ignored too (3.5.7 p.345)
+                # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies (RP2040 3.4.5.2 p.326); those of a forced instruction are ignored too (3.5.7 p.344)
                 self.delay_left = 0 if self.exec_word is not None else self._delay_of(word)
             if jump is not None:
                 self.pc = jump & 31
@@ -784,7 +784,7 @@ class StateMachine:
             self._background_pull()
 
     def _clock_enable(self):
-        """The fractional clock divider: True in the system clock cycles in which the state machine advances. Following RP2040 3.5.5 p.339-340 (RP2350 11.5.5 p.822-823): the divider
+        """The fractional clock divider: True in the system clock cycles in which the state machine advances. Following RP2040 3.5.5 p.339-340 (RP2350 11.5.5 p.821-822): the divider
         counts a division period of n system clock cycles and emits an enable pulse at its end; it keeps a running total of the fractional part (first-order delta-sigma) of each
         period, and every time this total wraps through 1 the next period is n + 1 cycles. The average rate is 1 / (n + f/256). The datasheet does not say where the first period
         starts after the state machine is enabled; here a period starts on the first enabled cycle (with a divisor of 1 the enable is asserted on every cycle, Figure 45) [verify]."""
@@ -862,7 +862,7 @@ class PioBlock:
         0, or 16 on PIO version 1 (the 48-GPIO parts).
     sync_cycles : int
         Cycles of the input synchroniser: 2 by default, a "standard 2-flipflop synchroniser" on each GPIO input that is engaged unless the INPUT_SYNC_BYPASS bit of the GPIO is
-        set (RP2040 3.5.6.3 p.342 and Table 376 p.375, RP2350 11.5.6.3 p.825); 0 bypasses it for every GPIO.
+        set (RP2040 3.5.6.3 p.342 and Table 376 p.374, RP2350 11.5.6.3 p.824); 0 bypasses it for every GPIO.
     loopback : str
         How a state machine sees its own block's outputs. ``"direct"`` (the default, the convention of bitweave's simulator and of pioweave's Amaranth simulation): an instruction
         sees the pin levels written by the previous cycle's instruction. ``"datasheet"``: "a state machine observing its own outputs is subject to ... a two-cycle delay when
@@ -1098,14 +1098,14 @@ class PioBlock:
             elif run:
                 sm._step(view, ctx)
         # apply the effects in state machine order, so that the highest-numbered state machine wins on a pin (levels and directions separately) when several write it in the same
-        # cycle (RP2040 3.5.6.1 p.341-342, RP2350 11.5.6.1 p.824-825); within one state machine the side-set was staged after the OUT / SET and so wins (RP2040 3.5.1 p.332)
+        # cycle (RP2040 3.5.6.1 p.341-342, RP2350 11.5.6.1 p.823-824); within one state machine the side-set was staged after the OUT / SET and so wins (RP2040 3.5.1 p.332)
         for dirs, pin, bit in ctx.writes:
             if dirs:
                 self.dirs = (self.dirs & ~(1 << pin)) | (bit << pin)
             else:
                 self.out_level = (self.out_level & ~(1 << pin)) | (bit << pin)
         self.irq &= ~sum(1 << f for f in ctx.irq_clear)
-        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.799 and 11.4.11 p.814)
+        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.798)
         for nb, f in ctx.irq_clear_other:
             nb.irq &= ~(1 << f)
         for nb, f in ctx.irq_set_other:

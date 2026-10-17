@@ -42,7 +42,7 @@ class ParityTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- thresholds of PULL IFEMPTY and PUSH IFFULL
     def test_pull_ifempty_and_push_iffull_use_the_thresholds(self):
-        # RP2040 3.4.6.2 p.327 / 3.4.7.2 p.328: IfFull / IfEmpty compare with PUSH_THRESH / PULL_THRESH, the thresholds of autopush and autopull
+        # RP2040 3.4.6.2 p.326 / 3.4.7.2 p.327: IfFull / IfEmpty compare with PUSH_THRESH / PULL_THRESH, the thresholds of autopush and autopull
         p = prog()
         p.in_(X, 8)
         p.push(iffull=True, block=False)                 # 8 bits shifted in, threshold 16: does nothing
@@ -95,7 +95,7 @@ class ParityTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- shift registers
     def test_shift_directions_of_in_and_out(self):
-        # RP2040 3.4.4.2 p.326: IN first shifts the ISR to make room, then copies the data into the gap; OUT writes the low (right shift) or high (left shift) bits
+        # RP2040 3.4.4.2 p.324-325 (IN) and 3.4.5.2 p.325-326 (OUT): IN first shifts the ISR to make room, then copies the data into the gap; OUT writes the low (right shift) or high (left shift) bits
         p = prog()
         p.in_(X, 4)
         p.in_(X, 4)

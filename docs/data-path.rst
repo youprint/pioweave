@@ -81,7 +81,7 @@ Autopull and autopush
 
 - An ``out`` finds the OSR *empty* when ``pull_thresh`` bits or more have been shifted out. It then does not execute: that cycle is a stall in which the OSR is refilled if the TX FIFO holds a word; the stall repeats while the FIFO is empty.
 - Otherwise it executes, and in the same cycle, after its shift, the OSR is refilled if the threshold is now reached and the FIFO holds a word, so the next ``out`` does not stall. Every other cycle (delay cycles, stalled cycles, any other instruction) refills too when the threshold is reached and a word is there.
-- An ``in`` shifts once; when the ISR has ``push_thresh`` bits or more the word is pushed and the ISR cleared if the RX FIFO has room, otherwise the ``in`` stalls until it has. Whether the retry after such a stall shifts again is not stated in the datasheet (the pseudocode of RP2040 3.5.4.1 p.337 is silent); the model shifts once and retries only the push [verify on a chip, HW-31].
+- An ``in`` shifts once; when the ISR has ``push_thresh`` bits or more the word is pushed and the ISR cleared if the RX FIFO has room, otherwise the ``in`` stalls until it has. Whether the retry after such a stall shifts again is not stated in the datasheet (the pseudocode of RP2040 3.5.4.1 p.338 is silent); the model shifts once and retries only the push [verify on a chip, HW-31].
 - A ``pull`` with autopull on does nothing when the OSR has just been refilled (no bits shifted out).
 
 Because these instructions can stall, write them with ``with``; the body (``m.next = ...``) runs in the cycle the instruction completes, and the state stays until then. Assign a side-set value *before* the ``with``, so that it applies while the state waits:
