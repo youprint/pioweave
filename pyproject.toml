@@ -35,7 +35,7 @@ pioweave = "pioweave.__main__:main"
 
 [project.urls]
 "Source Code" = "https://github.com/youprint/pioweave"
-"Documentation" = "https://github.com/youprint/pioweave/tree/main/docs"
+"Documentation" = "https://github.com/youprint/pioweave/tree/" # modified in pdm_build.py
 "Bug Tracker" = "https://github.com/youprint/pioweave/issues"
 
 [tool.pdm]
