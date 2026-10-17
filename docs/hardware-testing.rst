@@ -79,13 +79,13 @@ Preparation
      - multimeter
      - 3.3 V +/- 0.1 V ``[confirm]``; a board that fails is not used for the later steps
    * - HW-02
-     - estimate the oscilloscope bandwidth: a PIO program toggles a pin every cycle at a system-clock divider that gives 1, 5, 10, 20 MHz; read the amplitude on the scope
+     - find a lower bound of the oscilloscope bandwidth: a PIO program toggles a pin every state machine cycle (pin frequency = state machine clock / 2) at 1, 5, 10 and 20 MHz, and at the highest rate the chip gives (divider 1: system clock / 2, 62.5 MHz at 125 MHz ``[verify]``); read the amplitude on the scope with the shortest ground lead
      - oscilloscope, PIO program (``pioweave.designs.SquareWave`` at a chosen ``sm_clock_hz``)
-     - the frequency at which the displayed amplitude falls to 70 % of the 1 MHz amplitude is a rough upper bound of the usable bandwidth; the value is an estimate ``[estimate]`` (a square wave also contains harmonics) and is written down in this document
+     - write down the highest frequency at which the displayed amplitude is still at least 70 % of the 1 MHz amplitude: it is a lower bound of the bandwidth (``bandwidth >= f``), not the bandwidth, because a scope of ordinary bandwidth will not fall to 70 % at these rates and the pad (drive strength, slew rate), the probe and the ground lead limit the amplitude first; the bandwidth itself is read from the scope's data sheet or a sine generator, which this plan does not have ``[confirm]``
    * - HW-03
-     - analyser check: a PIO square wave at 1 MHz on a GPIO, probe on D0 and ground connected; ``[logic.sq]`` with ``measure freq_hz = 1000000`` and ``duty_pct = 50``
+     - analyser check: a PIO square wave on a GPIO, probe on D0 and ground connected, at 100 kHz (one analyser sample = 41.7 ns = 0.42 point of duty) and at 1 MHz (one sample = 4.2 points); ``[logic.sq]`` with ``measure freq_hz`` and ``duty_pct = 50``
      - analyser, then the oscilloscope on the same pin to cross-check
-     - frequency within 2 %, duty within 2 points; if the oscilloscope frequency differs from the analyser's by more than 2 % the analyser time base is not trusted for absolute values
+     - frequency within 2 % at both rates; duty within 2 points at 100 kHz and within 5 points at 1 MHz (a correct 50 % signal reads 45.8 % or 54.2 % in a single 1 MHz capture); if the oscilloscope frequency differs from the analyser's by more than 2 % the analyser time base is not trusted for absolute values
 
 Programs against the emulator
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -114,12 +114,12 @@ Programs against the emulator
      - analyser with ``decode`` (the SPI decoder of sigrok, ``protocol = "spi"`` ``[verify]`` for the decoder name and options)
      - the decoded bytes equal the written words in order
    * - HW-14
-     - UART TX example against a decoder: ``uart_tx`` at 115200 baud
+     - UART TX example against a decoder: ``uart_tx`` (2 state machine cycles per bit, start bit included) at 115200 baud, that is a state machine clock of 230.4 kHz (104 analyser samples per cycle)
      - analyser, ``[[logic.uart.decode]] protocol = "uart"``
      - decoded bytes equal the transmitted bytes (``expect_bytes``)
    * - HW-15
      - the full set at once: the differential test of the emulator already agrees with bitweave's simulator; here the same random cases (``tests/emu_random.py``, output pins only) are run on the chip and compared with the emulator. Choose cases without input waveforms and without undefined behaviour (those where the emulator and the simulator do not stop); at most 16 cases per session
-     - analyser (8 channels per analyser; use up to 4 analysers when more pins are needed)
+     - one analyser (8 channels); a case that needs more than 8 pins is split into several captures, because the four analysers have independent time bases and no common trigger, so their captures cannot be compared cycle by cycle
      - the captured pad levels equal the emulator's ``Result.wave`` for each case, with the same tolerance as HW-10
 
 Facts the datasheets state, checked on the chip
@@ -144,20 +144,20 @@ These steps need single system clock cycles to be visible, so they run with the 
      - the pin is 0
    * - HW-22
      - the input synchroniser: 2 system cycles of latency, none with INPUT_SYNC_BYPASS set (RP2040 3.5.6.3; ``test_synchroniser_is_two_flops_and_bypassed_per_gpio``)
-     - SM0 toggles pin A; a jumper joins A to B; SM1 ``wait 1 pin`` on B then ``set`` pin C; measure A rising to C rising, with the bypass bit for B cleared and then set (INPUT_SYNC_BYPASS is a register of the block; how the Pico SDK sets it is ``[verify]`` in the installed SDK)
-     - the latency with the bypass cleared exceeds the one with the bypass set by 2 system cycles = 167 ns = 4 samples (+/- 1 sample); the absolute numbers are compared with the emulator's (``sync_cycles`` 2 and 0, ``loopback="datasheet"``)
+     - SM0 toggles pin A; a jumper joins A to B; SM1 ``wait 1 pin`` on B then ``set`` pin C; measure A rising to C rising, with the bypass bit for B cleared and then set (INPUT_SYNC_BYPASS is a register of the block; the Pico SDK function is ``pio_set_input_sync_bypass_with_mask`` [verify in the installed SDK version]; the generated ``main.c`` sets the bypass for every GPIO the design reads, so the step edits it for the cleared case)
+     - the latency with the bypass cleared exceeds the one with the bypass set by 2 system cycles = 167 ns = 4 samples; each of the two edges is read to +/- 1 sample, so one capture gives 4 +/- 2 samples: take the median of at least 10 captures and accept 3 to 5 samples; the absolute numbers are compared with the emulator's (``sync_cycles`` 2 and 0, ``loopback="datasheet"``)
    * - HW-23
      - the output-to-input loop of one state machine: 2 cycles with the bypass, 4 with the synchroniser (RP2040 3.5.6.1; ``test_own_outputs_seen_after_two_or_four_cycles_in_datasheet_mode``)
      - a program sets a pin and ``jmp pin`` back-to-back on the same pin, then copies the observed level to a second pin; count the cycles between the two pin edges
-     - the count equals the emulator's with ``loopback="datasheet"`` (2 and 4); on the RP2350 the datasheet does not state it: record the measured value, it settles the ``[verify]`` in :doc:`emulator`
+     - the count equals the emulator's with ``loopback="datasheet"`` (2 and 4 system cycles = 4 and 8 samples at 12 MHz; median of at least 10 captures, each edge +/- 1 sample); on the RP2350 the datasheet does not state it: record the measured value, it settles the ``[verify]`` in :doc:`emulator`
    * - HW-24
      - the fractional divider period pattern (RP2040 3.5.5; ``test_fractional_divider_extends_some_periods_by_one``)
      - divider 2.5 at the 12 MHz system clock, the program toggles a pin every state machine cycle; read the half-periods from the capture
      - the half-periods alternate 2 and 3 system cycles (167 ns and 250 ns); which of them comes first after enabling is ``[verify]`` in :doc:`emulator`: record it. At 125 MHz the 8 ns steps are below the analyser's resolution: check only the mean (HW-25)
    * - HW-25
-     - the mean fractional rate at full speed
-     - two state machines of the same block with dividers 2.5 and 2.0 toggling two pins; compare the two frequencies in one capture
-     - the ratio is 1.25 within 0.2 % (both use the analyser's time base)
+     - the mean fractional rate (at 125 MHz the pins would toggle at 25 and 31.25 MHz, above the 12 MHz Nyquist limit of the 24 MHz analyser, so the step runs at the 12 MHz system clock)
+     - system clock slowed to 12 MHz (see above); two state machines of the same block with dividers 2.5 and 2.0 toggling two pins every cycle (pins at 2.4 MHz and 3 MHz: 10 and 8 samples per period); count the edges of both pins in one capture of at least 1 ms. Variant at 125 MHz: dividers 250.5 and 250.0 (pins at 249.5 kHz and 250 kHz, ratio 1.002), counted over a capture of at least 100 ms ``[verify]`` the capture depth of the DLA Mini
+     - the ratio of the edge counts is 1.25 within 0.2 % at 12 MHz (2400 and 3000 edges per ms, so one edge of counting error is 0.04 %); both pins use the analyser's time base, so its accuracy cancels
    * - HW-26
      - forced instructions ignore delay, divider and enable (RP2040 3.5.7)
      - the host writes SMx_INSTR with a ``set pins`` that carries a delay of 9 while the state machine is disabled and with a divider of 1000
