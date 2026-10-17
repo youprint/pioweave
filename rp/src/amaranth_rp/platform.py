@@ -48,6 +48,7 @@ class _RPPioPlatform(Platform):
     required_tools = ["pioasm"]
     default_clk = None
     default_rst = None
+    sdk_board = None          # Pico SDK board name (PICO_BOARD) of a board definition; None for a bare chip
 
     def __init__(self, sm_clock_hz=None):
         """`sm_clock_hz`: the state machine clock the C and MicroPython projects ask for (the PIO clock after the divider); None keeps the

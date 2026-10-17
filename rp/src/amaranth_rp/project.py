@@ -214,7 +214,8 @@ def write_project(plan, compiled, platform, name, project, elaboratable=None, fa
     if project == "pico-c":
         plan.add_file("CMakeLists.txt", _cmake(name))
         plan.add_file("main.c", _c_main(compiled, name, platform))
-        cfg = ("[firmware.%s]\nsource_dir = \"{root}\"\nchip = \"%s\"\n# sdk_path = \"/path/to/pico-sdk\"        # or set PICO_SDK_PATH\n# toolchain_dir = \"/path/to/arm-none-eabi/bin\"\n\n" % (name, platform.chip)) + cfg
+        board = ('board = "%s"\n' % platform.sdk_board) if platform.sdk_board else ""
+        cfg = ("[firmware.%s]\nsource_dir = \"{root}\"\nchip = \"%s\"\n" % (name, platform.chip)) + board + "# sdk_path = \"/path/to/pico-sdk\"        # or set PICO_SDK_PATH\n# toolchain_dir = \"/path/to/arm-none-eabi/bin\"\n\n" + cfg
     elif project == "micropython":
         prog_py, main_py = _micropython(compiled, name, platform, find_pioasm())
         plan.add_file(name + "_pio.py", prog_py)

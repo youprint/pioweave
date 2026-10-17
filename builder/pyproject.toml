@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["pdm-backend>=2.4"]
+build-backend = "pdm.backend"
 
 [project]
 name = "amaranth-rp-builder"
@@ -8,14 +8,29 @@ version = "0.1.0"
 description = "Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (pioasm text and an independent encoder)"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+authors = [{ name = "the project owner" }]
+keywords = ["pio", "rp2040", "rp2350", "raspberry-pi", "pioasm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Typing :: Typed",
+]
 dependencies = []
-license = { text = "Proprietary" }
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.urls]
+"Source Code" = "https://github.com/youprint/bitweave/tree/main/python"
 
-[tool.setuptools.package-data]
-amaranth_rp_builder = ["py.typed"]
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+package-dir = "src"
+includes = ["src/amaranth_rp_builder"]
+source-includes = ["tests", "LICENSE", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
