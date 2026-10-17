@@ -48,6 +48,8 @@ The signature is that of ``amaranth.build.Platform.build`` (``elaboratable, name
      - ``[(cycle, word)]`` written by the host so that the instruction of that cycle sees them
    * - ``drain``
      - the host empties the RX FIFO every cycle (default ``True``)
+   * - ``irq_set``, ``irq_clear``
+     - ``[(cycle, flag)]``: the host raises or lowers an IRQ flag at the start of that cycle (the instruction of that cycle sees it; clear first, then set)
 
 The keywords ``factory``, ``cycles``, ``stim``, ``tx``, ``tx_feed`` and ``drain`` of version 0.1 development still work directly on ``build()`` and give a ``DeprecationWarning``.
 

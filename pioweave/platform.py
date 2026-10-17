@@ -279,7 +279,7 @@ class _RPPioPlatform(Platform):
             self._scratch[name] = Signal(32, name="pio_" + name)
         return self._scratch[name]
 
-    def shifter(self, m, out_shift="right", in_shift="right"):
+    def shifter(self, m, out_shift="right", in_shift="right", **config):
         """The OSR / ISR shifters and the two FIFOs of the state machine (`pioweave.data.Shifter`); call it once, inside ``elaborate()``.
 
         Parameters
@@ -288,6 +288,8 @@ class _RPPioPlatform(Platform):
             The module of the design.
         out_shift, in_shift : str
             ``"right"`` or ``"left"``, the shift direction of the OSR and the ISR.
+        **config :
+            ``autopull``, ``pull_thresh``, ``autopush``, ``push_thresh``, ``status``, ``status_n``, ``fifo_join`` (see `pioweave.data.Shifter`).
 
         Returns
         -------
@@ -300,7 +302,7 @@ class _RPPioPlatform(Platform):
             If a direction is not valid or the platform already has a shifter.
         """
         from .data import Shifter
-        return Shifter(self, m, out_shift, in_shift, self.tx_init)
+        return Shifter(self, m, out_shift, in_shift, self.tx_init, **config)
 
     def create_missing_domain(self, name):
         return ClockDomain(name, reset_less=True)

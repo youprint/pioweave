@@ -84,6 +84,65 @@ class ProjectFileTests(support.TestCase):
         self.assertTrue('28 = "' in toml and "24 = " in toml and "25 = " in toml)         # the PIO's own pin numbers in the case
         self.assertNotIn("pio_set_gpio_base", read(build(self.tmp_path / "a", "pin_branch", "pico-c") / "main.c"))
 
+    def test_autopull_and_autopush_reach_every_project_kind(self):
+        out = build(self.tmp_path, "spi_master", "pico-c")
+        toml, main = read(out / "bitweave.toml"), read(out / "main.c")
+        for want in ("autopull = true", "autopush = true", "pull_thresh = 8", "push_thresh = 8", 'out_shift = "left"', 'in_shift = "left"'):
+            self.assertIn(want, toml, want)
+        for want in ("sm_config_set_out_shift(&c, false, true, 8)", "sm_config_set_in_shift(&c, false, true, 8)"):
+            self.assertIn(want, main, want)
+        # a design without them keeps the defaults of the SDK
+        self.assertIn("sm_config_set_out_shift(&c, true, false, 32)", read(build(self.tmp_path / "u", "uart_tx", "pico-c") / "main.c"))
+        self.assertNotIn("autopull", read(build(self.tmp_path / "u2", "uart_tx", "pio") / "bitweave.toml"))
+
+    @unittest.skipIf(find_pioasm() is None, reason="pioasm not found (set PIOASM)")
+    def test_autopull_and_autopush_reach_the_micropython_decorator(self):
+        prog = read(build(self.tmp_path, "spi_master", "micropython") / "spi_master_pio.py")
+        for want in ("out_shiftdir=rp2.PIO.SHIFT_LEFT", "in_shiftdir=rp2.PIO.SHIFT_LEFT", "autopull=True", "autopush=True", "pull_thresh=8", "push_thresh=8"):
+            self.assertIn(want, prog, want)
+
+    def test_irq_events_and_rel_reach_the_generated_files(self):
+        out = build(self.tmp_path, "irq_handshake", "pico-c")
+        toml, main = read(out / "bitweave.toml"), read(out / "main.c")
+        self.assertIn("[[pio.irq_handshake.sim.irq_set]]", toml)
+        self.assertIn("[[pio.irq_handshake.sim.irq_clear]]", toml)
+        self.assertIn("flag = 1", toml)
+        self.assertRegex(toml, r"expect_irq = \d+")
+        for want in ("uint sm = 0;", "pio_sm_claim(pio, sm);", "pio->irq_force = 1u << 1;", "pio_interrupt_clear(pio, 0);"):
+            self.assertIn(want, main, want)
+        self.assertNotIn("pio_claim_unused_sm", main)
+        self.assertIn("pio_claim_unused_sm", read(build(self.tmp_path / "n", "uart_tx", "pico-c") / "main.c"))     # without rel the SDK picks a free state machine
+        self.assertIn("irq set 2 rel", read(out / "irq_handshake.pio"))
+
+    @unittest.skipIf(find_pioasm() is None, reason="pioasm not found (set PIOASM)")
+    def test_micropython_notes_the_host_irq_events_it_cannot_reproduce(self):
+        main = read(build(self.tmp_path, "irq_handshake", "micropython") / "main.py")
+        self.assertIn("no code for it", main)
+
+    def test_micropython_refuses_status_and_in_count(self):
+        for example, chip in (("osre_loop", "rp2040"),):
+            cls, chip, stim, cycles, opts = pio_designs.entry(example)
+            design, pl = cls(), PLATFORMS[chip]()
+            with self.assertRaisesRegex(PioProjectError, "cannot configure `mov"):
+                pl.build(design, example, str(self.tmp_path / example), project="micropython")
+
+    def test_fifo_join_and_wait_pin_reach_the_generated_files(self):
+        out = build(self.tmp_path, "tx_join", "pico-c")
+        toml, main = read(out / "bitweave.toml"), read(out / "main.c")
+        self.assertIn('fifo_join = "tx"', toml)
+        self.assertIn("sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);", main)
+        self.assertEqual(main.count("pio_sm_put_blocking"), 9)          # eight words fit the joined FIFO of the example's nine; the ninth is the host write after cycle 30
+        self.assertNotIn("printf", main)                                 # no RX FIFO to read
+        gate = build(self.tmp_path / "g", "pin_gate", "pico-c")
+        self.assertIn("sm_config_set_in_pins(&c, 4)", read(gate / "main.c"))
+        self.assertIn("in_base = 4", read(gate / "bitweave.toml"))
+        self.assertIn("wait 1 pin 1", read(gate / "pin_gate.pio"))
+
+    @unittest.skipIf(find_pioasm() is None, reason="pioasm not found (set PIOASM)")
+    def test_fifo_join_reaches_the_micropython_decorator(self):
+        prog = read(build(self.tmp_path, "tx_join", "micropython") / "tx_join_pio.py")
+        self.assertIn("fifo_join=rp2.PIO.JOIN_TX", prog)
+
     def test_pico_c_inputs_and_jmp_pin(self):
         main = read(build(self.tmp_path, "pin_branch", "pico-c") / "main.c")
         self.assertTrue("sm_config_set_jmp_pin(&c, 4)" in main and "pio_sm_set_consecutive_pindirs(pio, sm, 4, 1, false)" in main and "pio_gpio_init(pio, 4)" in main)

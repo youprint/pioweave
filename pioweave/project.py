@@ -37,6 +37,7 @@ class SimOptions:
     `factory`: a callable returning a fresh `(design, platform)` pair (a design requests its pins from the platform when it is elaborated, so every run needs new
     ones); without it the project has no expectations. `cycles`: length of the simulation. `stim`: input waveforms {gpio: "0101..."}. `tx`: words in the TX FIFO at
     cycle 0. `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them. `drain`: the host empties the RX FIFO every cycle.
+    `irq_set` / `irq_clear`: [(cycle, flag)] IRQ flags the host raises or lowers at the start of that cycle (before the instruction; clear first, then set).
 
     Parameters
     ----------
@@ -52,6 +53,8 @@ class SimOptions:
         ``(cycle, word)`` pairs written by the host.
     drain : bool
         The host empties the RX FIFO every cycle.
+    irq_set, irq_clear : tuple of tuple
+        ``(cycle, flag)`` pairs: the host raises or lowers an IRQ flag at the start of that cycle.
     """
     factory: object = None
     cycles: int = 64
@@ -59,6 +62,8 @@ class SimOptions:
     tx: tuple = ()
     tx_feed: tuple = ()
     drain: bool = True
+    irq_set: tuple = ()
+    irq_clear: tuple = ()
 
 
 class PioProjectError(Exception):
@@ -80,7 +85,7 @@ def find_pioasm():
 
 
 # ----------------------------------------------------------------------------- reference simulation (Amaranth)
-def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
+def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_set=(), irq_clear=()):
     """Simulate the design built by `factory` with the Amaranth simulator.
 
     Alignment with the PIO model: the FSM state in cycle t does what the instruction executed in cycle t does; outputs are registers, so the value
@@ -101,12 +106,14 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
         ``(cycle, word)`` pairs written by the host so that the instruction of that cycle sees them.
     drain : bool
         The host empties the RX FIFO every cycle (the default, as bitweave's simulator does).
+    irq_set, irq_clear : iterable of tuple
+        ``(cycle, flag)`` pairs: the host raises or lowers an IRQ flag at the start of that cycle (the instruction of that cycle sees it; clear first, then set).
 
     Returns
     -------
     dict
         ``{"waves": {gpio: waveform}`` for every output GPIO, ``"rx": [(cycle, word)]`` pushed to the RX FIFO, ``"rx_left"``: words still in it, ``"tx_left"``:
-        words still in the TX FIFO``}``.
+        words still in the TX FIFO, ``"irq"``: the eight IRQ flags as a mask after each cycle (empty when the design uses none)``}``.
 
     Examples
     --------
@@ -114,12 +121,14 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
     >>> from pioweave.platform import RP2040PioPlatform
     >>> from pioweave.project import amaranth_run
     >>> amaranth_run(lambda: (SquareWave(), RP2040PioPlatform()), 8)
-    {'waves': {0: '11001100'}, 'rx': [], 'rx_left': 0, 'tx_left': 0}
+    {'waves': {0: '11001100'}, 'rx': [], 'rx_left': 0, 'tx_left': 0, 'irq': []}
     """
     design, platform = factory()
     platform.simulation = True
     feeds = sorted((c, w) for c, w in tx_feed if c > 0)
     platform.tx_init = list(tx) + [w for c, w in tx_feed if c <= 0]
+    irq_set, irq_clear = list(irq_set), list(irq_clear)
+    platform.irq_init = sum({1 << f for c, f in irq_set if c <= 0})         # a flag the host raises before cycle 0 (lowering a flag that is not set does nothing)
     frag = Fragment.get(design, platform)
     platform.bind_buffers(frag)
     top = Module()
@@ -137,6 +146,8 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
     waves = {g: [] for g in outs}
     fifo = platform._shifter.fifo if platform._shifter is not None else None
     rx, state = [], {}
+    irqm = platform._shifter.irq_model if platform._shifter is not None else None
+    irq_trace = []
 
     async def tb(ctx):
         for t in range(cycles):
@@ -151,10 +162,16 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
                 due = [w for c, w in feeds if c == t + 1]
                 ctx.set(fifo.host_tx_en, 1 if due else 0)
                 ctx.set(fifo.host_tx_data, due[0] if due else 0)
-                ctx.set(fifo.host_rx_pop, 1 if drain else 0)
+                if irqm is not None:           # events of cycle t + 1 are signalled now and sampled at the edge: the instruction of that cycle sees them
+                    ctx.set(irqm.host_set, sum({1 << f for c, f in irq_set if c == t + 1}))
+                    ctx.set(irqm.host_clr, sum({1 << f for c, f in irq_clear if c == t + 1}))
+                ctx.set(fifo.host_rx_pop, 0)
+                ctx.set(fifo.host_rx_drain, 1 if drain else 0)
             await ctx.tick()
             for g, (sig, k) in outs.items():
                 waves[g].append(str((ctx.get(sig) >> k) & 1))
+            if irqm is not None:
+                irq_trace.append(ctx.get(irqm.after))
             if fifo is not None and ctx.get(fifo.host_rx_pending):
                 rx.append((t, ctx.get(fifo.host_rx_data)))
         if fifo is not None:
@@ -166,7 +183,7 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
     sim.add_clock(clock_period())
     sim.add_testbench(tb)
     sim.run()
-    return {"waves": {g: "".join(v) for g, v in waves.items()}, "rx": rx, "rx_left": state.get("rx_left", 0), "tx_left": state.get("tx_left", 0)}
+    return {"waves": {g: "".join(v) for g, v in waves.items()}, "rx": rx, "rx_left": state.get("rx_left", 0), "tx_left": state.get("tx_left", 0), "irq": irq_trace}
 
 
 def amaranth_waves(factory, cycles, stim=None):
@@ -190,19 +207,24 @@ def amaranth_waves(factory, cycles, stim=None):
 
 
 # ----------------------------------------------------------------------------- files
-def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None):
+def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None, irq_set=(), irq_clear=(), golden_irq=None):
     lines = ["[pio.%s]" % name, 'source = "{root}/%s.pio"' % name, 'chip = "%s"' % chip, "",
              "[[pio.%s.sim]]" % name, 'name = "amaranth_reference"', "cycles = %d" % cycles]
     for k, v in compiled.sim_config().items():
-        lines.append('%s = "%s"' % (k, v) if isinstance(v, str) else "%s = %d" % (k, v))
+        lines.append('%s = "%s"' % (k, v) if isinstance(v, str) else "%s = %s" % (k, "true" if v is True else "false" if v is False else "%d" % v))
     if tx:
         lines.append("tx = [%s]" % ", ".join(str(w) for w in tx))
     if not drain:
         lines.append("rx_drain = false")
     if golden_rx is not None:
         lines.append("expect_rx = [%s]" % ", ".join(str(w) for _, w in golden_rx))
+    if golden_irq is not None:
+        lines.append("expect_irq = %d" % golden_irq)
     for c, w in tx_feed:
         lines += ["", "[[pio.%s.sim.tx_feed]]" % name, "cycle = %d" % c, "value = %d" % w]
+    for key, events in (("irq_set", irq_set), ("irq_clear", irq_clear)):
+        for c, f in events:
+            lines += ["", "[[pio.%s.sim.%s]]" % (name, key), "cycle = %d" % c, "flag = %d" % f]
     if stim:
         lines.append("")
         lines.append("[pio.%s.sim.pins_in]" % name)
@@ -216,7 +238,7 @@ def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), dr
     return "\n".join(lines) + "\n"
 
 
-def _c_main(compiled, name, platform, tx=(), tx_feed=()):
+def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
     base = compiled.gpio_base
     lines = ['#include <stdio.h>', '#include "pico/stdlib.h"', '#include "hardware/clocks.h"', '#include "hardware/pio.h"', '#include "%s.pio.h"' % name, "",
              "// Generated from the Amaranth design by python/pio_project.py. Not run on a chip [verify].", ""]
@@ -225,7 +247,12 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=()):
     lines += ["int main(void) {", "    PIO pio = pio0;"]
     if base:
         lines.append("    pio_set_gpio_base(pio, %d);     // this program uses GPIO %d to %d; the SDK pin numbers below are real GPIO numbers" % (base, base, base + 31))
-    lines += ["    uint sm = pio_claim_unused_sm(pio, true);", "    uint offset = pio_add_program(pio, &%s_program);" % name,
+    if compiled.irq_rel:
+        lines += ["    uint sm = 0;                      // the program uses `irq ... rel`: the flag number depends on the state machine number, the simulation case is state machine 0",
+                  "    pio_sm_claim(pio, sm);"]
+    else:
+        lines += ["    uint sm = pio_claim_unused_sm(pio, true);"]
+    lines += ["    uint offset = pio_add_program(pio, &%s_program);" % name,
               "    pio_sm_config c = %s_program_get_default_config(offset);" % name]
     if compiled.set_pin:
         b, n = compiled.set_pin.gpios[0], len(compiled.set_pin.gpios)
@@ -243,9 +270,15 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=()):
     if compiled.in_pin:
         lines.append("    sm_config_set_in_pins(&c, %d);" % compiled.in_pin.gpios[0])
     if compiled.out_shift:
-        lines.append("    sm_config_set_out_shift(&c, %s, false, 32);" % ("true" if compiled.out_shift == "right" else "false"))
+        lines.append("    sm_config_set_out_shift(&c, %s, %s, %d);" % ("true" if compiled.out_shift == "right" else "false", "true" if compiled.autopull else "false", compiled.pull_thresh))
     if compiled.in_shift:
-        lines.append("    sm_config_set_in_shift(&c, %s, false, 32);" % ("true" if compiled.in_shift == "right" else "false"))
+        lines.append("    sm_config_set_in_shift(&c, %s, %s, %d);" % ("true" if compiled.in_shift == "right" else "false", "true" if compiled.autopush else "false", compiled.push_thresh))
+    if compiled.fifo_join != "none":
+        lines.append("    sm_config_set_fifo_join(&c, %s);" % {"tx": "PIO_FIFO_JOIN_TX", "rx": "PIO_FIFO_JOIN_RX"}[compiled.fifo_join])
+    if compiled.in_count is not None:
+        lines.append("    sm_config_set_in_pin_count(&c, %d);" % compiled.in_count)
+    if compiled.status_sel:
+        lines.append("    sm_config_set_mov_status(&c, %s, %d);" % ({"tx": "STATUS_TX_LESSTHAN", "rx": "STATUS_RX_LESSTHAN", "irq": "STATUS_IRQ_SET"}[compiled.status_sel], compiled.status_n))
     for g in compiled.input_gpios:
         lines += ["    pio_gpio_init(pio, %d);" % g, "    pio_sm_set_consecutive_pindirs(pio, sm, %d, 1, false);" % g]
     if compiled.jmp_gpio is not None:
@@ -255,9 +288,17 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=()):
     if compiled.uses_rx:
         lines.insert(lines.index("int main(void) {") + 1, "    stdio_init_all();")
     lines += ["    pio_sm_init(pio, sm, offset, &c);"]
-    lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);" % w for w in tx]           # the TX FIFO holds four words; more would block before the machine runs
+    lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);" % w for w in tx[:compiled.tx_depth]]       # the TX FIFO holds four words (eight when joined for TX, none when joined for RX); more would block before the machine runs
     lines += ["    pio_sm_set_enabled(pio, sm, true);"]
-    lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);       // written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed]
+    lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);       // written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed if compiled.tx_depth]
+    events = sorted([(c, 0, f) for c, f in irq_clear] + [(c, 1, f) for c, f in irq_set])
+    if events:
+        lines.append("    // IRQ flags the host raises or lowers in the simulation case; the CPU cannot hit the cycle, so the order is kept and the time is approximate")
+    for c, kind, f in events:
+        if kind:
+            lines.append("    pio->irq_force = 1u << %d;       // host raises flag %d (simulation: at the start of cycle %d)" % (f, f, c))
+        else:
+            lines.append("    pio_interrupt_clear(pio, %d);     // host lowers flag %d (simulation: at the start of cycle %d)" % (f, f, c))
     if compiled.uses_rx:
         lines += ["    while (true) {", '        printf("rx %08lx\\n", (unsigned long)pio_sm_get_blocking(pio, sm));', "    }", "}", ""]
     else:
@@ -292,10 +333,22 @@ def _decorator(compiled):
         args.append("out_shiftdir=rp2.PIO.SHIFT_%s" % compiled.out_shift.upper())
     if compiled.in_shift:
         args.append("in_shiftdir=rp2.PIO.SHIFT_%s" % compiled.in_shift.upper())
+    if compiled.fifo_join != "none":
+        args.append("fifo_join=rp2.PIO.JOIN_%s" % compiled.fifo_join.upper())
+    if compiled.autopull:
+        args.append("autopull=True")
+    if compiled.autopush:
+        args.append("autopush=True")
+    if compiled.pull_thresh != 32:
+        args.append("pull_thresh=%d" % compiled.pull_thresh)
+    if compiled.push_thresh != 32:
+        args.append("push_thresh=%d" % compiled.push_thresh)
     return "@rp2.asm_pio(%s)" % ", ".join(args)
 
 
-def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=()):
+def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
+    if compiled.status_sel or compiled.in_count is not None:
+        raise PioProjectError("project='micropython' cannot configure `mov ..., status` or the IN pin count (rp2.asm_pio / rp2.StateMachine have no such option [verify]): use project='pico-c'")
     if pioasm is None:
         raise PioProjectError("project='micropython' needs pioasm to write the MicroPython program (set PIOASM or put pioasm on the PATH)")
     d = tempfile.mkdtemp(prefix="pio_mp_")
@@ -325,6 +378,8 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=()):
     if compiled.in_pin:
         kw.append("in_base=Pin(%d, Pin.IN)" % compiled.in_pin.gpios[0])
     freq = "freq=%d, " % platform.sm_clock_hz if platform.sm_clock_hz else ""
+    host_irq = ["# The simulation case has the host %s IRQ flag %d at the start of cycle %d; this project has no code for it (MicroPython has no call that raises or lowers a PIO IRQ flag [verify])."
+                % ("raise" if k else "lower", f, c) for k, events in ((1, irq_set), (0, irq_clear)) for c, f in events]
     main = "\n".join([
         "# Generated from the Amaranth design by python/pio_project.py. Not run on a device [verify the rp2 API names against the MicroPython documentation].",
         ] + (["# This program uses GPIO %d to %d: it needs the PIO GPIO base %d, which MicroPython may not offer [verify]." % (compiled.gpio_base, compiled.gpio_base + 31, compiled.gpio_base)] if compiled.gpio_base else []) + [
@@ -332,9 +387,9 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=()):
         "from machine import Pin",
         "from %s_pio import %s" % (name, name), "",
         "sm = rp2.StateMachine(0, %s, %s%s)" % (name, freq, ", ".join(kw)),
-        ] + ["sm.put(0x%08x)" % w for w in tx] + [
+        ] + host_irq + ["sm.put(0x%08x)" % w for w in tx[:compiled.tx_depth]] + [
         "sm.active(1)",
-        ] + ["sm.put(0x%08x)       # written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed] + (
+        ] + ["sm.put(0x%08x)       # written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed if compiled.tx_depth] + (
         ["while True:", "    print(\"rx %08x\" % sm.get())"] if compiled.uses_rx else []) + [""])
     return text, main
 
@@ -381,21 +436,23 @@ def write_project(plan, compiled, platform, name, project, sim=None):
         raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'")
     sim = sim or SimOptions()
     factory, cycles, stim, tx, tx_feed, drain = sim.factory, sim.cycles, sim.stim, tuple(sim.tx), tuple(sim.tx_feed), sim.drain
-    run = amaranth_run(factory, cycles, stim, tx, tx_feed, drain) if factory is not None else None
-    golden = golden_rx = None
+    irq_set, irq_clear = tuple(sim.irq_set), tuple(sim.irq_clear)
+    run = amaranth_run(factory, cycles, stim, tx, tx_feed, drain, irq_set, irq_clear) if factory is not None else None
+    golden = golden_rx = golden_irq = None
     if run is not None:
         golden = {compiled.pin(g): w for g, w in run["waves"].items() if g in compiled.output_gpios}
         golden_rx = run["rx"] if (compiled.uses_rx or run["rx"]) else None
+        golden_irq = run["irq"][-1] if run["irq"] else None
     stim = {compiled.pin(g): w for g, w in (stim or {}).items()}      # bitweave takes the PIO's own pin numbers
     plan.add_file(name + ".pio", compiled.program.pio_text())
-    cfg = _toml_case(compiled, name, cycles, stim, golden, platform.chip, tx, tx_feed, drain, golden_rx)
+    cfg = _toml_case(compiled, name, cycles, stim, golden, platform.chip, tx, tx_feed, drain, golden_rx, irq_set, irq_clear, golden_irq)
     if project == "pico-c":
         plan.add_file("CMakeLists.txt", _cmake(name, compiled.uses_rx))
-        plan.add_file("main.c", _c_main(compiled, name, platform, tx, tx_feed))
+        plan.add_file("main.c", _c_main(compiled, name, platform, tx, tx_feed, irq_set, irq_clear))
         board = ('board = "%s"\n' % platform.sdk_board) if platform.sdk_board else ""
         cfg = ("[firmware.%s]\nsource_dir = \"{root}\"\nchip = \"%s\"\n" % (name, platform.chip)) + board + "# sdk_path = \"/path/to/pico-sdk\"        # or set PICO_SDK_PATH\n# toolchain_dir = \"/path/to/arm-none-eabi/bin\"\n\n" + cfg
     elif project == "micropython":
-        prog_py, main_py = _micropython(compiled, name, platform, find_pioasm(), tx, tx_feed)
+        prog_py, main_py = _micropython(compiled, name, platform, find_pioasm(), tx, tx_feed, irq_set, irq_clear)
         plan.add_file(name + "_pio.py", prog_py)
         plan.add_file("main.py", main_py)
     plan.add_file("bitweave.toml", cfg)

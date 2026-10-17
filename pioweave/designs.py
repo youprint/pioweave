@@ -5,11 +5,12 @@ Each one is an ordinary Amaranth Elaboratable: one FSM, pins from platform.buffe
 is one PIO instruction (one clock cycle); states without effects that follow an instruction become its delay. The comments give the cycle count.
 `PROGRAMS` maps a name to (design class, platform name, simulation stimulus, cycles) for the project writers and the tests.
 """
+from amaranth.build import Pins, Resource
 from amaranth.hdl import Module
 from amaranth.lib import wiring
 
 __all__ = [
-    "PioDesign", "SquareWave", "PulseTrain", "ButtonPulse", "ClockedBits", "PinBranch", "HighPins", "UartTx", "UartRx", "ByteSwap", "NoBlockEcho", "PROGRAMS", "entry",
+    "PioDesign", "SquareWave", "PulseTrain", "ButtonPulse", "ClockedBits", "PinBranch", "HighPins", "UartTx", "UartRx", "ByteSwap", "NoBlockEcho", "SpiMaster", "OsreLoop", "IrqHandshake", "PinGate", "TxJoin", "PROGRAMS", "entry",
 ]
 
 
@@ -337,6 +338,144 @@ class NoBlockEcho(PioDesign):
         return m
 
 
+class SpiMaster(PioDesign):
+    """A full-duplex SPI master (mode 0, most significant bit first, 2 cycles per half bit) with **autopull and autopush**: `out pins, 1` takes the next bit of the OSR and
+    the OSR is refilled from the TX FIFO by itself every 8 bits (the threshold), `in pins, 1` shifts the sampled bit into the ISR and the ISR is pushed by itself every 8 bits.
+    The clock is the side-set pin; the data go out on the OUT pin and are sampled from the IN pin. A TX word supplies one byte, in its most significant byte; the received
+    byte arrives in the low byte of the RX word."""
+
+    def elaborate(self, platform):
+        m = Module()
+        clk = platform.buffer(m, "o", "gpio", 2)
+        mosi = platform.buffer(m, "o", "gpio", 3)
+        miso = platform.buffer(m, "i", "gpio", 4)
+        sh = platform.shifter(m, out_shift="left", in_shift="left", autopull=True, pull_thresh=8, autopush=True, push_thresh=8)
+        with m.FSM():
+            with m.State("OUT"):
+                m.d.sync += clk.o.eq(0)               # assigned before the `with`, so that it applies in the stalled cycles too
+                with sh.out(m, mosi, 1):              # out pins, 1 side 0 [1]: stalls while the TX FIFO has no word for the refill
+                    m.next = "OUT_HOLD"
+            with m.State("OUT_HOLD"):
+                m.next = "IN"
+            with m.State("IN"):
+                m.d.sync += clk.o.eq(1)
+                with sh.in_(m, miso, 1):              # in pins, 1 side 1 [1]: stalls while the RX FIFO is full
+                    m.next = "IN_HOLD"
+            with m.State("IN_HOLD"):
+                m.next = "OUT"
+        return m
+
+
+class OsreLoop(PioDesign):
+    """`pull ifempty`, `jmp !osre`, `mov ..., status` and `mov pins`: bytes go out of the OUT pin least significant bit first, one bit per three cycles; with a threshold of 8 a
+    word supplies one byte (its low byte), because `pull ifempty` does nothing until 8 bits have been shifted out and `jmp !osre` loops while the OSR is not empty (fewer than 8 bits
+    shifted). After each byte the pin shows whether the TX FIFO holds fewer than 2 words (`mov y, status`, `mov pins, y`)."""
+
+    def elaborate(self, platform):
+        m = Module()
+        pin = platform.buffer(m, "o", "gpio", 3)
+        sh = platform.shifter(m, out_shift="right", pull_thresh=8, status="tx", status_n=2)
+        with m.FSM():
+            with m.State("PULL"):
+                with sh.pull(m, ifempty=True):        # pull ifempty block
+                    m.next = "OUT"
+            with m.State("OUT"):
+                sh.out(m, pin, 1)                     # out pins, 1 [1]
+                m.next = "OUT_HOLD"
+            with m.State("OUT_HOLD"):
+                m.next = "AGAIN"
+            with m.State("AGAIN"):
+                with m.If(sh.osr_not_empty):          # jmp !osre PULL
+                    m.next = "PULL"
+                with m.Else():
+                    m.next = "STATUS"
+            with m.State("STATUS"):
+                sh.mov(m, "y", "status")              # mov y, status: all ones while the TX FIFO holds fewer than 2 words
+                m.next = "SHOW"
+            with m.State("SHOW"):
+                sh.mov(m, pin, "y")                   # mov pins, y
+                m.next = "SHOW_HOLD"
+            with m.State("SHOW_HOLD"):
+                m.next = "PULL"
+        return m
+
+
+class IrqHandshake(PioDesign):
+    """IRQ flags between the program and the host: the output goes high, `irq wait 0` raises flag 0 and stalls until the host lowers it, the output goes low, `irq set 2 rel`
+    raises flag 2 (state machine 0, so flag 2), `wait 1 irq 1` stalls until the host raises flag 1 (and lowers it again by passing), and `irq clear 2` lowers flag 2."""
+
+    def elaborate(self, platform):
+        m = Module()
+        pin = platform.buffer(m, "o", "gpio", 0)
+        sh = platform.shifter(m)
+        with m.FSM():
+            with m.State("HIGH"):
+                m.d.sync += pin.o.eq(1)
+                m.next = "RAISE"
+            with m.State("RAISE"):
+                with sh.irq(m, 0, "wait"):            # irq wait 0
+                    m.next = "LOW"
+            with m.State("LOW"):
+                m.d.sync += pin.o.eq(0)
+                m.next = "FLAG2"
+            with m.State("FLAG2"):
+                sh.irq(m, 2, "set", rel=True)         # irq set 2 rel
+                m.next = "GO"
+            with m.State("GO"):
+                with sh.wait_irq(m, 1):               # wait 1 irq 1
+                    m.next = "DROP2"
+            with m.State("DROP2"):
+                sh.irq(m, 2, "clear")                 # irq clear 2
+                m.next = "HIGH"
+        return m
+
+
+class PinGate(PioDesign):
+    """`wait pin`: a three-pin input bus on GPIO 4 to 6 (the IN group, added to the platform by the design); the output on GPIO 0 goes high when bit 1 of the bus (GPIO 5) goes
+    high (`wait 1 pin 1`) and low when bit 0 (GPIO 4) goes low (`wait 0 pin 0`)."""
+
+    def elaborate(self, platform):
+        m = Module()
+        platform.add_resources([Resource("bus", 0, Pins("4 5 6", dir="i"))])
+        out = platform.buffer(m, "o", "gpio", 0)
+        bus = platform.buffer(m, "i", "bus", 0)
+        with m.FSM():
+            with m.State("WAIT_HIGH"):
+                with m.If(bus.i[1]):                  # wait 1 pin 1: relative to the IN base (GPIO 4), so GPIO 5
+                    m.next = "UP"
+            with m.State("UP"):
+                m.d.sync += out.o.eq(1)
+                m.next = "WAIT_LOW"
+            with m.State("WAIT_LOW"):
+                with m.If(~bus.i[0]):                 # wait 0 pin 0
+                    m.next = "DOWN"
+            with m.State("DOWN"):
+                m.d.sync += out.o.eq(0)
+                m.next = "WAIT_HIGH"
+        return m
+
+
+class TxJoin(PioDesign):
+    """Joined FIFOs (`fifo_join="tx"`): the TX FIFO holds eight words and there is no RX FIFO. Eight words are in it at cycle 0 (a normal TX FIFO keeps only four, the
+    host's other writes are dropped); each round `pull block` takes one and `out pins, 4` shows its low nibble on GPIO 4 to 7."""
+
+    def elaborate(self, platform):
+        m = Module()
+        platform.add_resources([Resource("nibble", 0, Pins("4 5 6 7", dir="o"))])
+        nib = platform.buffer(m, "o", "nibble", 0)
+        sh = platform.shifter(m, fifo_join="tx")
+        with m.FSM():
+            with m.State("PULL"):
+                with sh.pull(m):
+                    m.next = "OUT"
+            with m.State("OUT"):
+                sh.out(m, nib)                        # out pins, 4 [1]
+                m.next = "HOLD"
+            with m.State("HOLD"):
+                m.next = "PULL"
+        return m
+
+
 def _uart_frames(bytes_, cycles_per_bit=8, idle=6):
     """A serial line carrying `bytes_` as 8N1 frames, least significant bit first, high when idle."""
     bits = "1" * idle
@@ -358,6 +497,11 @@ PROGRAMS = {
     "uart_rx": (UartRx, "rp2040", {4: _uart_frames([0x5A, 0xC3])}, 230),
     "byte_swap": (ByteSwap, "rp2350", {}, 40, {"tx": [0x11223344], "tx_feed": [(14, 0xAABBCCDD)]}),
     "noblock_echo": (NoBlockEcho, "rp2040", {}, 40, {"tx": [7, 9]}),
+    "osre_loop": (OsreLoop, "rp2040", {}, 90, {"tx": [0xA5, 0x3C, 0xF0], "tx_feed": [(60, 0x99)]}),
+    "irq_handshake": (IrqHandshake, "rp2040", {}, 70, {"irq_clear": [(12, 0), (46, 0)], "irq_set": [(5, 1), (30, 1), (52, 1)]}),
+    "pin_gate": (PinGate, "rp2040", {4: "0001111000111110000", 5: "0000111111000011111", 6: "0"}, 60),
+    "tx_join": (TxJoin, "rp2040", {}, 48, {"tx": [0x1, 0x2, 0x4, 0x8, 0x3, 0x5, 0xA, 0xF, 0xC], "tx_feed": [(30, 0x6)]}),
+    "spi_master": (SpiMaster, "rp2040", {4: "0011010111001010" * 8}, 80, {"tx": [0xA5000000, 0x3C000000], "tx_feed": [(50, 0x81000000)]}),
 }
 
 
@@ -372,7 +516,7 @@ def entry(name):
     Returns
     -------
     tuple
-        ``(design class, chip, stimulus, cycles, options)``; `options` may hold ``tx``, ``tx_feed`` and ``drain``.
+        ``(design class, chip, stimulus, cycles, options)``; `options` may hold ``tx``, ``tx_feed``, ``drain``, ``irq_set`` and ``irq_clear``.
 
     Raises
     ------

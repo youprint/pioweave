@@ -30,7 +30,7 @@ import re
 from amaranth.hdl import Const, Signal
 from amaranth.lib import io
 
-from .builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, NULL, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
+from .builder import (ALWAYS, CLEAR, INVERT, ISR, NONE, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PINS, PIN, REVERSE, SET, STATUS, WAIT, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
 
 from . import data as D
 from ._compat import Fragment, ast, fsm_state_names
@@ -48,11 +48,12 @@ class PioCompileError(Exception):
 
 
 _AMARANTH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(ast.__file__)))
+_DATA_PY = os.path.abspath(D.__file__)          # statements the shifter helpers create carry a location inside pioweave/data.py: the design's own line is used instead
 
 
 def _user_loc(loc, fallback):
     """A source location in the user's design: statements created by m.next carry a location inside Amaranth itself, so those fall back to the state's."""
-    if isinstance(loc, tuple) and len(loc) == 2 and not os.path.abspath(str(loc[0])).startswith(_AMARANTH_DIR):
+    if isinstance(loc, tuple) and len(loc) == 2 and not os.path.abspath(str(loc[0])).startswith(_AMARANTH_DIR) and os.path.abspath(str(loc[0])) != _DATA_PY:
         return loc
     return fallback
 
@@ -98,7 +99,19 @@ class Compiled:
     input_gpios, output_gpios : list of int
         The GPIOs the design reads and drives.
     out_shift, in_shift : str or None
-        ``"right"`` or ``"left"`` when the program uses ``out`` or ``in``.
+        ``"right"`` or ``"left"`` when the program uses ``out`` or ``in`` (or autopull / autopush is on).
+    autopull, autopush : bool
+        The automatic transfers of the shifter.
+    pull_thresh, push_thresh : int
+        Their thresholds (32 when not configured).
+    fifo_join : str
+        ``"none"``, ``"tx"`` or ``"rx"``.
+    status_sel, status_n : str or None, int
+        The source of ``mov ..., status`` when the program uses it (``"tx"``, ``"rx"`` or ``"irq"``) and its level or flag number.
+    in_count : int or None
+        The number of input pins the program masks the IN mapping to (PIO version 1; set when it reads the pins with ``mov``).
+    uses_irq, irq_rel : bool
+        The program uses IRQ flags; one of the instructions has the ``rel`` form.
     uses_tx, uses_rx : bool
         The program has a ``pull`` (TX FIFO) or a ``push`` (RX FIFO).
     wrap_target_state : int
@@ -121,10 +134,23 @@ class Compiled:
         self.in_pin = None        # PinInfo read by `in pins`
         self.out_shift = None     # "right" / "left" when the program uses OUT / IN
         self.in_shift = None
+        self.autopull = self.autopush = False
+        self.pull_thresh = self.push_thresh = 32
+        self.fifo_join = "none"   # "tx" / "rx" when the shifter joins the FIFOs
+        self.status_sel = None    # "tx" / "rx" when the program uses `mov ..., status`
+        self.status_n = 0
+        self.uses_irq = False     # the program uses an IRQ flag (irq, wait irq, or mov status from the flags)
+        self.irq_rel = False      # ... with the rel form, which makes the state machine number matter (the model and the generated code use state machine 0)
+        self.in_count = None      # the width the IN pins are masked to (PIO version 1), set when the program reads the pins with `mov`
         self.uses_tx = False
         self.uses_rx = False
         self.wrap_target_state = 0
         self.gpio_base = 0        # GPIO that PIO pin 0 maps to: 0, or 16 on the 48-GPIO parts (RP2350B, RP2354B)
+
+    @property
+    def tx_depth(self):
+        """The depth of the TX FIFO: 4, 8 when the FIFOs are joined for TX, 0 when they are joined for RX."""
+        return {"none": 4, "tx": 8, "rx": 0}[self.fifo_join]
 
     def pin(self, gpio):
         """The PIO's own number of a real GPIO (relative to the GPIO base).
@@ -169,15 +195,29 @@ class Compiled:
             c["out_shift"] = self.out_shift
         if self.in_shift:
             c["in_shift"] = self.in_shift
+        if self.autopull:
+            c["autopull"] = True
+        if self.autopush:
+            c["autopush"] = True
+        if self.fifo_join != "none":
+            c["fifo_join"] = self.fifo_join
+        if self.status_sel:
+            c["status_sel"], c["status_n"] = self.status_sel, self.status_n
+        if self.in_count is not None:
+            c["in_count"] = self.in_count
+        if self.pull_thresh != 32:
+            c["pull_thresh"] = self.pull_thresh
+        if self.push_thresh != 32:
+            c["push_thresh"] = self.push_thresh
         if self.gpio_base:
             c["gpio_base"] = self.gpio_base
         return c
 
 
-def _state_signal_and_cases(frag):
+def _state_signal_and_cases(frag, sh=None):
     sync = list(frag.statements.get("sync", []))
     fsms = [s for s in sync if isinstance(s, ast.Switch) and isinstance(s.test, Signal) and fsm_state_names(s.test)]
-    others = [s for s in sync if s not in fsms]
+    others = [s for s in sync if s not in fsms and not (sh is not None and _is_background_refill(s, sh))]
     if len(fsms) != 1:
         _fail("expected exactly one m.FSM() in the design, found %d" % len(fsms))
     if others:
@@ -185,10 +225,21 @@ def _state_signal_and_cases(frag):
     return fsms[0]
 
 
+def _is_background_refill(stmt, sh):
+    """The one statement outside the FSM that Shifter adds for autopull: ``if bg: osr, osr_n, tx_pop <- refill`` (the background refill of design note 2b)."""
+    if sh.bg is None or not isinstance(stmt, ast.Switch):
+        return False
+    parts = stmt.test.parts if isinstance(stmt.test, ast.Concat) else [stmt.test]
+    if len(parts) != 1 or parts[0] is not sh.bg:
+        return False
+    allowed = {id(sh.osr), id(sh.osr_n), id(sh.fifo.tx_pop)}
+    return all(isinstance(a, ast.Assign) and id(a.lhs) in allowed for case in stmt.cases for a in case[1])
+
+
 def _check_fragment(frag):
     for sf in frag.subfragments:
-        if not any(isinstance(o, (io.Buffer, D.FifoModel)) for o in getattr(sf[0], "origins", None) or []):
-            _fail("submodules are not supported (only amaranth.lib.io.Buffer for pins and the FIFO model of platform.shifter()): write the design as one module with one FSM")
+        if not any(isinstance(o, (io.Buffer, D.FifoModel, D.ShiftFlags, D.IrqModel)) for o in getattr(sf[0], "origins", None) or []):
+            _fail("submodules are not supported (only amaranth.lib.io.Buffer for pins and the FIFO model, the flags and the IRQ model of platform.shifter()): write the design as one module with one FSM")
     for dom, stmts in frag.statements.items():
         if dom == "sync":
             continue
@@ -208,11 +259,13 @@ class Ctx:
         self.pos = {}        # FSM state number (Amaranth numbers states by first mention) -> position in definition order = PIO address
         self.reg = {id(s): n for n, s in platform._scratch.items()}
         self.sh = getattr(platform, "_shifter", None)
+        self.wait_pins = {}          # id(PinInfo) -> PinInfo of the input groups tested by `wait pin`
 
     def flag(self, sig):
-        """'tx' / 'rx' when `sig` is the TX-ready / RX-space flag of the FIFO model."""
+        """``(operation codes, style)`` when `sig` is a flag of the data path (the TX-ready / RX-space flag of the FIFO model or a flag of `ShiftFlags`), else None.
+        Style ``"body"``: the data statements are in the branch that completes; ``"both"``: they are in both branches."""
         if self.sh is not None:
-            return {id(self.sh.fifo.tx_ready): "tx", id(self.sh.fifo.rx_space): "rx"}.get(id(sig))
+            return self.sh.flag_info.get(id(sig))
         return None
 
     def regname(self, sig):
@@ -221,8 +274,8 @@ class Ctx:
 
 def _flip(c):
     kind = c[0]
-    if kind in ("pin", "flag"):
-        return (kind, c[1], not c[2])
+    if kind in ("pin", "flag", "osre", "pinbit"):
+        return (kind, c[1], not c[2]) + tuple(c[3:])
     return ("cmp", "!=" if c[1] == "==" else "==", c[2], c[3])
 
 
@@ -231,21 +284,32 @@ def _norm_cond(part, truth, ctx, loc):
     if isinstance(part, Signal):
         if ctx.flag(part):
             return ("flag", part, truth)
+        if ctx.sh is not None and ctx.sh.cond_flags.get(id(part)) == "osre":
+            return ("osre", part, truth)
         if ctx.platform.pin_info(part) and len(part) == 1:
             return ("pin", part, truth)
         if ctx.regname(part) is not None:
             return ("cmp", "!=" if truth else "==", ctx.regname(part), 0)      # if(x): bool(x)
         _fail("the test uses signal %r, which is not an input pin or a scratch register" % part.name, loc)
+    if isinstance(part, ast.Slice) and isinstance(part.value, Signal) and part.stop - part.start == 1:
+        info = ctx.platform.pin_info(part.value)
+        if info is not None and part.value is info.i:
+            if len(part.value) == 1:
+                return ("pin", part.value, truth)
+            return ("pinbit", part.value, truth, part.start)       # one bit of an input group: wait pin
+        _fail("the test uses a bit of signal %r, which is not an input pin" % part.value.name, loc)
     if isinstance(part, ast.Operator):
         op, a = part.operator, part.operands
-        if op == "~" and len(a) == 1 and isinstance(a[0], Signal) and len(a[0]) == 1:
+        if op == "~" and len(a) == 1 and isinstance(a[0], (Signal, ast.Slice)) and len(a[0]) == 1:
             return _norm_cond(a[0], not truth, ctx, loc)
-        if op in ("b", "r|") and len(a) == 1 and isinstance(a[0], Signal):
+        if op in ("b", "r|") and len(a) == 1 and isinstance(a[0], (Signal, ast.Slice)):
             return _norm_cond(a[0], truth, ctx, loc)
         if op in ("==", "!=") and len(a) == 2:
             l, r = a
             if isinstance(l, Const):
                 l, r = r, l
+            if isinstance(l, ast.Slice) and isinstance(r, Const) and r.value in (0, 1) and l.stop - l.start == 1:
+                return _norm_cond(l, (r.value == 1) == ((op == "==") == truth), ctx, loc)
             if isinstance(l, Signal) and isinstance(r, Const):
                 eq = (op == "==") == truth
                 if ctx.platform.pin_info(l) and len(l) == 1 and r.value in (0, 1):
@@ -323,16 +387,32 @@ def _const(rhs, loc):
     return None
 
 
-def _expected_owned(sh, code):
-    """The shifter signals the helper statements of operation `code` assign (the compiler accepts nothing else on them)."""
+def _expected_owned(sh, code, mov=None, flagged=False):
+    """The shifter signals the helper statements of operation `code` assign (the compiler accepts nothing else on them). `mov`: (dst, src, op) names of a `mov`."""
     f = sh.fifo
     if code in (D.PULL_BLOCK, D.PULL_NOBLOCK):
-        return [sh.op, sh.osr, sh.osr_n, f.tx_pop]
+        return [sh.op, sh.osr, sh.osr_n, f.tx_pop] + ([sh.arg] if flagged else [])
     if code in (D.PUSH_BLOCK, D.PUSH_NOBLOCK):
-        return [sh.op, sh.isr, sh.isr_n, f.rx_data, f.rx_push]
-    if code in (D.OUT_PINS, D.OUT_X, D.OUT_Y, D.OUT_NULL):
-        return [sh.op, sh.arg, sh.osr, sh.osr_n]
-    return [sh.op, sh.arg, sh.isr, sh.isr_n]
+        return [sh.op, sh.isr, sh.isr_n, f.rx_data, f.rx_push] + ([sh.arg] if flagged else [])
+    if code in D.OUT_CODES:
+        return [sh.op, sh.arg, sh.osr, sh.osr_n] + ([sh.isr, sh.isr_n] if code == D.OUT_ISR else []) + ([f.tx_pop] if sh.autopull else [])
+    if code in (D.IRQ_SET, D.IRQ_CLEAR, D.IRQ_WAIT, D.WAIT_IRQ):
+        flag, pol = mov                     # for the IRQ operations `mov` carries (flag, polarity)
+        if code == D.IRQ_SET:
+            return [sh.op, sh.arg, sh.irq_model.set_tog[flag]]
+        if code == D.IRQ_CLEAR:
+            return [sh.op, sh.arg, sh.irq_model.clr_tog[flag]]
+        if code == D.IRQ_WAIT:
+            return [sh.op, sh.arg, sh.irq_model.set_tog[flag], sh.irq_pend]
+        return [sh.op, sh.arg] + ([sh.irq_model.clr_tog[flag]] if pol else [])
+    if code == D.MOV:
+        dst = mov[0]
+        if dst == "isr":
+            return [sh.op, sh.arg, sh.isr, sh.isr_n]
+        if dst == "osr":
+            return [sh.op, sh.arg, sh.osr, sh.osr_n] + ([f.tx_pop] if sh.autopull else [])
+        return [sh.op, sh.arg]
+    return [sh.op, sh.arg, sh.isr, sh.isr_n] + ([sh.in_pend, f.rx_data, f.rx_push] if sh.autopush else [])
 
 
 def _data_op(effects, ctx, loc):
@@ -341,7 +421,9 @@ def _data_op(effects, ctx, loc):
     sh = ctx.sh
     if sh is None:
         return None, effects
-    owned = [sh.op, sh.arg, sh.osr, sh.osr_n, sh.isr, sh.isr_n, sh.fifo.tx_pop, sh.fifo.rx_push, sh.fifo.rx_data]
+    owned = [sh.op, sh.arg, sh.osr, sh.osr_n, sh.isr, sh.isr_n, sh.in_pend, sh.irq_pend, sh.fifo.tx_pop, sh.fifo.rx_push, sh.fifo.rx_data]
+    if sh.irq_model is not None:
+        owned += sh.irq_model.set_tog + sh.irq_model.clr_tog
     ids = {id(x) for x in owned}
     got = {k for k in effects if k in ids}
     if not got:
@@ -352,24 +434,45 @@ def _data_op(effects, ctx, loc):
     if not isinstance(marker, Const) or marker.value not in D.NAMES:
         _fail("the operation marker of the shifter is not set by a helper", loc)
     code = marker.value
-    if got != {id(x) for x in _expected_owned(sh, code)}:
+    mov = None
+    irq = None
+    if code in (D.IRQ_SET, D.IRQ_CLEAR, D.IRQ_WAIT, D.WAIT_IRQ):
+        arg = effects.get(id(sh.arg), (None, None))[1]
+        if not isinstance(arg, Const) or sh.irq_model is None:
+            _fail("the operand code of %s is not set by the helper" % D.NAMES[code], loc)
+        irq = {"flag": arg.value & 7, "rel": bool(arg.value & 8), "pol": (arg.value >> 4) & 1}
+        mov = (irq["flag"], irq["pol"])
+    if code == D.MOV:
+        arg = effects.get(id(sh.arg), (None, None))[1]
+        if not isinstance(arg, Const):
+            _fail("the operand code of mov is not set by the helper sh.mov", loc)
+        rev = lambda table, v: next((k for k, c in table.items() if c == v), None)      # noqa: E731
+        mov = (rev(D.MOV_DST, arg.value & 7), rev(D.MOV_SRC, (arg.value >> 3) & 7), rev(D.MOV_OP, (arg.value >> 6) & 3))
+        if None in mov:
+            _fail("the operand code of mov is not set by the helper sh.mov", loc)
+    flagged = code in (D.PULL_BLOCK, D.PULL_NOBLOCK, D.PUSH_BLOCK, D.PUSH_NOBLOCK) and id(sh.arg) in got
+    if got != {id(x) for x in _expected_owned(sh, code, mov, flagged)}:
         _fail("the statements on the shifter registers do not match `%s`: use the helper methods, one operation per state" % D.NAMES[code], loc)
     n = None
-    if code in (D.OUT_PINS, D.OUT_X, D.OUT_Y, D.OUT_NULL, D.IN_PINS, D.IN_X, D.IN_Y, D.IN_NULL):
+    if code in D.OUT_CODES or code in D.IN_CODES:
         arg = effects[id(sh.arg)][1]
         if not isinstance(arg, Const):
             _fail("the bit count of %s must be a constant" % D.NAMES[code], loc)
         n = arg.value
     rest = {k: v for k, v in effects.items() if k not in ids}
-    data = {"code": code, "name": D.NAMES[code], "n": n, "pin": None}
-    if code in (D.OUT_X, D.OUT_Y):
-        reg = ctx.platform._scratch["x" if code == D.OUT_X else "y"]
+    if flagged and not (isinstance(effects[id(sh.arg)][1], Const) and effects[id(sh.arg)][1].value == 1):
+        _fail("the operand code of %s is not set by the helper" % D.NAMES[code], loc)
+    base_name = D.NAMES[code].replace("pull ", "pull ifempty ").replace("push ", "push iffull ") if flagged else D.NAMES[code]
+    data = {"irq": irq, "flag": flagged, "code": code, "name": base_name if mov is None or irq is not None else "mov %s, %s%s" % (mov[0], {"none": "", "invert": "!", "reverse": "::"}[mov[2]], mov[1]), "n": n, "pin": None, "mov": mov}
+    reg_dst = {D.OUT_X: "x", D.OUT_Y: "y"}.get(code) or (mov[0] if mov is not None and mov[0] in ("x", "y") else None)
+    if reg_dst is not None:
+        reg = ctx.platform._scratch[reg_dst]
         if rest.pop(id(reg), None) is None:
-            _fail("%s: the destination register is not assigned" % D.NAMES[code], loc)
-    elif code == D.OUT_PINS:
+            _fail("%s: the destination register is not assigned" % data["name"], loc)
+    elif code == D.OUT_PINS or (mov is not None and mov[0] == "pins"):
         found = [(k, info) for k, (sig, rhs) in rest.items() for info in [ctx.platform.pin_info(sig)] if info is not None and sig is info.o and not isinstance(rhs, Const)]
         if len(found) != 1:
-            _fail("out pins: the destination pin is not assigned the shifted bits", loc)
+            _fail("%s: the destination pin is not assigned the shifted bits" % data["name"], loc)
         rest.pop(found[0][0])
         data["pin"] = found[0][1]
     return data, rest
@@ -465,9 +568,12 @@ def compile_design(top, platform, name="top"):
     frag = Fragment.get(top, platform)
     _check_fragment(frag)
     platform.bind_buffers(frag)
-    sw = _state_signal_and_cases(frag)
+    sw = _state_signal_and_cases(frag, getattr(platform, "_shifter", None))
     state_sig = sw.test
     ctx = Ctx(platform, state_sig)
+    if ctx.sh is not None and ctx.sh.unentered():
+        _fail("this helper call can stall (autopull for `out`, autopush for `in`, `wait`-type operations) and must be written `with sh.<operation>(m): m.next = ...` so that the "
+              "state stays while it stalls; as a plain call the Amaranth design and the PIO program would differ", ctx.sh.unentered()[0])
     # program order = the order the states are defined in the source (the cases of the Switch); Amaranth's state numbers follow first mention
     order = [int(case[0][0] or "0", 2) for case in sw.cases]
     bodies = {int(case[0][0] or "0", 2): case[1] for case in sw.cases}
@@ -564,12 +670,6 @@ def _build(platform, name, n, names, trees, ctx):
     if len(outs_used) > 1:
         _fail("`out pins` drives more than one pin group (%s); PIO has one OUT group per state machine" % ", ".join("%s_%s" % (p.name, p.number) for p in outs_used.values()))
     out_pin = next(iter(outs_used.values()), None)
-    in_pin = None
-    if D.IN_PINS in codes:
-        srcs = {id(ctx.platform.pin_info(sg)): ctx.platform.pin_info(sg) for sg in ctx.sh.in_sources}
-        if len(srcs) != 1:
-            _fail("`in pins` reads %d different pin groups; PIO has one IN group per state machine" % len(srcs))
-        in_pin = next(iter(srcs.values()))
     if side_pin is not None and len(side_pin.gpios) > MAX_SIDE_BITS:
         _fail("side-set pin group %s_%s has %d bits; with the enable bit at most %d fit" % (side_pin.name, side_pin.number, len(side_pin.gpios), MAX_SIDE_BITS))
     if set_pin is not None and len(set_pin.gpios) > 5:
@@ -587,6 +687,13 @@ def _build(platform, name, n, names, trees, ctx):
     targets = {0}
     for i in range(n):
         ops[i] = _classify(i, n, trees[i], wrap_t, names, set_pin, side_pin, ctx, jmp_gpios)
+    in_pin = None
+    srcs = {id(ctx.platform.pin_info(sg)): ctx.platform.pin_info(sg) for sg in (ctx.sh.in_sources if ctx.sh is not None else [])}
+    srcs.update(ctx.wait_pins)          # filled while the states were classified
+    if len(srcs) > 1:
+        _fail("`in pins`, `mov ..., pins` or `wait pin` reads %d different pin groups; PIO has one IN group per state machine" % len(srcs))
+    if srcs:
+        in_pin = next(iter(srcs.values()))
     referenced = set()
     for i in range(n):
         for t in ops[i].targets:
@@ -667,12 +774,25 @@ def _build(platform, name, n, names, trees, ctx):
     if in_pin is not None:
         _contiguous(in_pin, "input")
     c.out_pin, c.in_pin = out_pin, in_pin
-    if codes & {D.OUT_PINS, D.OUT_X, D.OUT_Y, D.OUT_NULL}:
-        c.out_shift = "right" if ctx.sh.out_right else "left"
-    if codes & {D.IN_PINS, D.IN_X, D.IN_Y, D.IN_NULL}:
-        c.in_shift = "right" if ctx.sh.in_right else "left"
-    c.uses_tx = bool(codes & {D.PULL_BLOCK, D.PULL_NOBLOCK})
-    c.uses_rx = bool(codes & {D.PUSH_BLOCK, D.PUSH_NOBLOCK})
+    sh = ctx.sh
+    out_codes, in_codes = set(D.OUT_CODES), set(D.IN_CODES)
+    movs = [d["mov"] for d in dataops if d["code"] == D.MOV]
+    irqs = [d["irq"] for d in dataops if d["irq"]]
+    c.irq_rel = any(i["rel"] for i in irqs)
+    if sh is not None:
+        if any(src == "status" for _, src, _ in movs):
+            c.status_sel, c.status_n = sh.status, sh.status_n
+        c.uses_irq = bool(irqs) or c.status_sel == "irq"
+        if any(src == "pins" for _, src, _ in movs) and in_pin is not None:
+            c.in_count = len(in_pin.gpios)
+        c.autopull, c.autopush, c.pull_thresh, c.push_thresh = sh.autopull, sh.autopush, sh.pull_thresh, sh.push_thresh
+        c.fifo_join = sh.fifo_join
+        if codes & out_codes or sh.autopull:
+            c.out_shift = "right" if sh.out_right else "left"
+        if codes & in_codes or sh.autopush:
+            c.in_shift = "right" if sh.in_right else "left"
+    c.uses_tx = (bool(codes & {D.PULL_BLOCK, D.PULL_NOBLOCK}) or bool(sh is not None and sh.autopull and codes & out_codes)) and c.fifo_join != "rx"
+    c.uses_rx = (bool(codes & {D.PUSH_BLOCK, D.PUSH_NOBLOCK}) or bool(sh is not None and sh.autopush and codes & in_codes)) and c.fifo_join != "tx"
     c.output_gpios = sorted(set(outs))
     c.input_gpios = sorted({g for p in platform._pio_pins if p.i is not None for g in p.gpios})
     return c
@@ -764,6 +884,19 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
     if tside != eside:
         _fail("the side-set value differs between the two branches of the test; a PIO instruction applies one value", br.loc)
     side = tside
+    # wait pin: one bit of an input group (relative to the IN base)
+    if cond[0] == "pinbit":
+        if (tn == i) == (en == i):
+            _fail("a test on one bit of an input group can only be a wait (the state stays until the bit has a level): PIO has no jump on a pin relative to the IN base", br.loc)
+        stay_leaf_next, go_next = (tn, en) if tn == i else (en, tn)
+        if go_next != succ:
+            _fail("a state that waits for a pin must continue with the next state", br.loc)
+        if treg or ereg:
+            _fail("a waiting state cannot change registers", br.loc)
+        info = ctx.platform.pin_info(cond[1])
+        ctx.wait_pins[id(info)] = info
+        level = (not cond[2]) if tn == i else cond[2]
+        return Op("wait_pin", level=int(level), idx=cond[3], side=side, targets=[], foldable=True, pure_nop=False)
     # wait: stays until the test is true / false
     if cond[0] == "pin" and (tn == i) != (en == i):
         stay_leaf_next, go_next = (tn, en) if tn == i else (en, tn)
@@ -789,6 +922,12 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
         _fail("register changes differ between the two branches of the test; PIO's jmp x-- decrements on both", br.loc)
     kind = jump_when[0]
     dec = treg is not None and treg[0] == "dec"
+    if kind == "osre":
+        if not jump_when[2]:
+            _fail("PIO can jump while the OSR is not empty (jmp !osre) but not while it is empty: write the test as `sh.osr_not_empty` selecting the jump", br.loc)
+        if treg is not None:
+            _fail("a jmp !osre state cannot change a register", br.loc)
+        return Op("jmp", cond="!osre", target=target, side=side, targets=[target], foldable=False, pure_nop=False)
     if treg is not None and not dec:
         _fail("a state with a test can only decrement the tested register (jmp x--)", br.loc)
     if kind == "pin":
@@ -818,50 +957,79 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
     _fail("this comparison has no PIO jump (X == Y can be written as X != Y with the branches swapped)", br.loc)
 
 
-def _data_instruction(data, side, ctx, loc):
-    """The PIO instruction of an unconditional data-path operation (the blocking pull / push are recognised from their test, see _classify_flag)."""
+def _can_stall(code, sh):
+    """True when the operation can stall under the configuration of the shifter (so its state must test a flag)."""
+    if code in (D.PULL_BLOCK, D.PUSH_BLOCK, D.IRQ_WAIT, D.WAIT_IRQ):
+        return True
+    if code in D.OUT_CODES:
+        return sh.autopull
+    if code in D.IN_CODES:
+        return sh.autopush
+    return False
+
+
+_OUT_DST = {D.OUT_PINS: "pins", D.OUT_X: "x", D.OUT_Y: "y", D.OUT_NULL: "null", D.OUT_ISR: "isr"}
+_IN_SRC = {D.IN_PINS: "pins", D.IN_X: "x", D.IN_Y: "y", D.IN_NULL: "null", D.IN_ISR: "isr", D.IN_OSR: "osr"}
+
+
+def _data_instruction(data, side, ctx, loc, stalls=False):
+    """The PIO instruction of a data-path operation. An operation that can stall is recognised from the flag its state tests (see _classify_flag, `stalls` True);
+    in a state without that test it is a design error (a plain call of a helper that needs `with`)."""
     code = data["code"]
-    if code in (D.PULL_BLOCK, D.PUSH_BLOCK):
-        _fail("`%s` stalls while the FIFO cannot serve it: write `with sh.%s(m): m.next = ...` so the state stays until then" % (data["name"], "pull" if code == D.PULL_BLOCK else "push"), loc)
-    if code == D.PULL_NOBLOCK:
-        return Op("pull", block=False, side=side, targets=[], foldable=True, pure_nop=False)
-    if code == D.PUSH_NOBLOCK:
-        return Op("push", block=False, side=side, targets=[], foldable=True, pure_nop=False)
-    if code in (D.OUT_PINS, D.OUT_X, D.OUT_Y, D.OUT_NULL):
-        dst = {D.OUT_PINS: "pins", D.OUT_X: "x", D.OUT_Y: "y", D.OUT_NULL: "null"}[code]
-        return Op("out", dst=dst, n=data["n"], side=side, targets=[], foldable=True, pure_nop=False)
-    src = {D.IN_PINS: "pins", D.IN_X: "x", D.IN_Y: "y", D.IN_NULL: "null"}[code]
-    return Op("in", src=src, n=data["n"], side=side, targets=[], foldable=True, pure_nop=False)
+    if _can_stall(code, ctx.sh) and not stalls:
+        hint = {D.PULL_BLOCK: "pull", D.PUSH_BLOCK: "push", D.IRQ_WAIT: "irq(m, flag, 'wait')", D.WAIT_IRQ: "wait_irq"}.get(code)
+        _fail("`%s` stalls while it cannot complete: write `with sh.%s(m): m.next = ...` so the state stays until then" % (data["name"], hint or (
+            "out" if code in D.OUT_CODES else "in_")), loc)
+    if code in (D.PULL_NOBLOCK, D.PULL_BLOCK):
+        return Op("pull", block=code == D.PULL_BLOCK, cond=data["flag"], side=side, targets=[], foldable=True, pure_nop=False)
+    if code in (D.PUSH_NOBLOCK, D.PUSH_BLOCK):
+        return Op("push", block=code == D.PUSH_BLOCK, cond=data["flag"], side=side, targets=[], foldable=True, pure_nop=False)
+    if code in D.OUT_CODES:
+        return Op("out", dst=_OUT_DST[code], n=data["n"], side=side, targets=[], foldable=True, pure_nop=False)
+    if code in (D.IRQ_SET, D.IRQ_CLEAR, D.IRQ_WAIT):
+        return Op("irq", mode={D.IRQ_SET: "set", D.IRQ_CLEAR: "clear", D.IRQ_WAIT: "wait"}[code], flag=data["irq"]["flag"], rel=data["irq"]["rel"], side=side, targets=[],
+                  foldable=True, pure_nop=False)
+    if code == D.WAIT_IRQ:
+        return Op("wait_irq", pol=data["irq"]["pol"], flag=data["irq"]["flag"], rel=data["irq"]["rel"], side=side, targets=[], foldable=True, pure_nop=False)
+    if code == D.MOV:
+        dst, src, mop = data["mov"]
+        return Op("movg", dst=dst, src=src, mop=mop, side=side, targets=[], foldable=True, pure_nop=False)
+    return Op("in", src=_IN_SRC[code], n=data["n"], side=side, targets=[], foldable=True, pure_nop=False)
 
 
 def _classify_flag(i, succ, br, parts, tn, en, ctx):
-    """A blocking pull / push: the state stays while the FIFO flag is false and the operation runs in the cycle the flag is true."""
+    """A state that stalls on a flag of the data path: a blocking pull / push (the FIFO flag), an OUT with autopull or an IN with autopush (a flag of ShiftFlags).
+    The state stays while the flag is false and the operation runs in the cycle the flag is true."""
     (tl, tpins, treg, tdata), (el, epins, ereg, edata) = parts
-    kind = ctx.flag(br.cond[1])
-    want = D.PULL_BLOCK if kind == "tx" else D.PUSH_BLOCK
+    codes, style = ctx.flag(br.cond[1])
     if (tn == i) == (en == i):
-        _fail("a state that tests a FIFO flag must stay in the state on one branch and continue on the other (use `with sh.pull(m):` / `with sh.push(m):`)", br.loc)
+        _fail("a state that tests a flag of the data path must stay in the state on one branch and continue on the other (use the `with sh.<operation>(m):` form of the helper)", br.loc)
     go_then = tn != i
     go_next, go_pins, go_reg, go_data = (tn, tpins, treg, tdata) if go_then else (en, epins, ereg, edata)
     stay_pins, stay_reg, stay_data = (epins, ereg, edata) if go_then else (tpins, treg, tdata)
     if br.cond[2] != go_then:
-        _fail("the FIFO flag must be true on the branch that completes the instruction (the state waits while it is false)", br.loc)
-    if go_data is None or go_data["code"] != want or stay_data is not None:
-        _fail("a test on the %s FIFO flag belongs to `%s`: use `with sh.%s(m):`" % (kind.upper(), D.NAMES[want], "pull" if kind == "tx" else "push"), br.loc)
+        _fail("the flag must be true on the branch that completes the instruction (the state waits while it is false)", br.loc)
+    names = " / ".join(D.NAMES[c] for c in codes)
+    if go_data is None or go_data["code"] not in codes:
+        _fail("this flag belongs to `%s`: use `with sh.<operation>(m):`" % names, br.loc)
+    if style == "body" and stay_data is not None:
+        _fail("this flag belongs to `%s`: use `with sh.<operation>(m):`" % names, br.loc)
+    if style == "both" and stay_data != go_data:
+        _fail("the statements of `%s` must be the same whether the state waits or completes: use the helper, with nothing else in the `with` body but m.next" % go_data["name"], br.loc)
     if go_reg or stay_reg:
-        _fail("a state that waits for a FIFO cannot change registers", br.loc)
+        _fail("a state that waits cannot change registers", br.loc)
     if go_next != succ:
-        _fail("a blocking pull / push must continue with the next state (a jump needs a state of its own)", br.loc)
+        _fail("a blocking pull / push must continue with the next state (so must any instruction that can stall, such as an out with autopull; a jump needs a state of its own)", br.loc)
     for info, _ in list(go_pins.values()) + list(stay_pins.values()):
         if info is not ctx.side_pin:
-            _fail("pins that are set in a pull / push state must be the side-set pin", br.loc)
+            _fail("pins that are set in a state that waits must be the side-set pin", br.loc)
     if _side_of(go_pins, ctx.side_pin, br.loc) != _side_of(stay_pins, ctx.side_pin, br.loc):
-        _fail("the side-set value differs between waiting and completing; assign it before the `with sh.pull(m):` so it applies in both", br.loc)
+        _fail("the side-set value differs between waiting and completing; assign it before the `with` so it applies in both", br.loc)
     side = _side_of(go_pins, ctx.side_pin, br.loc)
-    return Op("pull" if kind == "tx" else "push", block=True, side=side, targets=[], foldable=True, pure_nop=False)
+    return _data_instruction(go_data, side, ctx, br.loc, stalls=True)
 
 
-_COND = {"always": ALWAYS, "!x": NOT_X, "x--": X_DEC, "!y": NOT_Y, "y--": Y_DEC, "x!=y": X_NE_Y, "pin": PIN}
+_COND = {"always": ALWAYS, "!x": NOT_X, "x--": X_DEC, "!y": NOT_Y, "y--": Y_DEC, "x!=y": X_NE_Y, "pin": PIN, "!osre": NOT_OSRE}
 _REG = {"x": X, "y": Y}
 
 
@@ -880,12 +1048,21 @@ def _emit(prog, op, labels, names):
     elif op.kind == "wait":
         prog.wait_gpio(op.level, op.gpio, **kw)
     elif op.kind == "pull":
-        prog.pull(block=op.block, **kw)
+        prog.pull(block=op.block, ifempty=op.cond, **kw)
     elif op.kind == "push":
-        prog.push(block=op.block, **kw)
+        prog.push(block=op.block, iffull=op.cond, **kw)
     elif op.kind == "out":
-        prog.out({"pins": PINS, "x": X, "y": Y, "null": NULL}[op.dst], op.n, **kw)
+        prog.out({"pins": PINS, "x": X, "y": Y, "null": NULL, "isr": ISR}[op.dst], op.n, **kw)
     elif op.kind == "in":
-        prog.in_({"pins": PINS, "x": X, "y": Y, "null": NULL}[op.src], op.n, **kw)
+        prog.in_({"pins": PINS, "x": X, "y": Y, "null": NULL, "isr": ISR, "osr": OSR}[op.src], op.n, **kw)
+    elif op.kind == "wait_pin":
+        prog.wait_pin(op.level, op.idx, **kw)
+    elif op.kind == "irq":
+        prog.irq(op.flag, mode={"set": SET, "clear": CLEAR, "wait": WAIT}[op.mode], rel=op.rel, **kw)
+    elif op.kind == "wait_irq":
+        prog.wait_irq(op.pol, op.flag, rel=op.rel, **kw)
+    elif op.kind == "movg":
+        prog.mov({"pins": PINS, "x": X, "y": Y, "isr": ISR, "osr": OSR}[op.dst], {"pins": PINS, "x": X, "y": Y, "null": NULL, "status": STATUS, "isr": ISR, "osr": OSR}[op.src],
+                 op={"none": NONE, "invert": INVERT, "reverse": REVERSE}[op.mop], **kw)
     else:
         raise PioCompileError("internal: unknown operation %s" % op.kind)
