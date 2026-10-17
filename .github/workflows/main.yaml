@@ -36,11 +36,11 @@ jobs:
       - name: Install Amaranth release
         if: ${{ matrix.amaranth-version != 'git' }}
         run: |
-          pip install 'amaranth==${{ matrix.amaranth-version }}' pytest
+          pip install 'amaranth==${{ matrix.amaranth-version }}'
       - name: Install Amaranth from git
         if: ${{ matrix.amaranth-version == 'git' }}
         run: |
-          pip install pytest git+https://github.com/amaranth-lang/amaranth.git
+          pip install git+https://github.com/amaranth-lang/amaranth.git
       - name: Install pioweave
         run: |
           pip install --no-deps -e .
@@ -49,8 +49,9 @@ jobs:
         # (the git version of Amaranth is not one the version gate accepts unless it is the tested commit, hence the override)
         env:
           PIOWEAVE_ALLOW_UNTESTED: ${{ matrix.amaranth-version == 'git' && '1' || '0' }}
+          PYTHONWARNINGS: error
         run: |
-          python -m pytest -q -W error tests
+          python -m unittest discover -t . -s tests -v
 
   document:
     runs-on: ubuntu-latest
