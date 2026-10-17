@@ -5,8 +5,12 @@
 The templates are small, complete designs; ``TEMPLATES`` maps a template name to its description. Needs no Amaranth to import; the generated project needs it (or, for
 ``builder-square``, nothing but pioweave).
 """
+import keyword
 import os
 import re
+import sys
+
+from ._validate import RESERVED_NAMES, MAX_NAME_LENGTH
 
 __all__ = ["TEMPLATES", "ScaffoldError", "scaffold", "template_names"]
 
@@ -304,7 +308,13 @@ TEMPLATES = {
 _GENERATOR = {"blink": (24, []), "uart-tx": (60, ["--tx", "0x55,0xC3"]), "uart-rx": (100, []), "builder-square": (48, [])}
 """template -> (cycles of the reference simulation, extra arguments of ``pioweave build``)"""
 
-_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+
+#: Modules a project module must not shadow (the project directory is first on `sys.path`): the standard library (3.10 and later know the list; for 3.9 the common ones) and the
+#: packages the project imports.
+_SHADOW = frozenset(getattr(sys, "stdlib_module_names", ())) | frozenset((
+    "abc", "argparse", "ast", "asyncio", "collections", "contextlib", "copy", "dataclasses", "enum", "functools", "importlib", "io", "itertools", "json", "math", "os", "pathlib",
+    "random", "re", "shutil", "string", "subprocess", "sys", "tempfile", "test", "time", "types", "typing", "unittest", "warnings")) | frozenset(("pioweave", "amaranth", "test"))
 
 
 def template_names():
@@ -355,9 +365,14 @@ def scaffold(name, template="blink", parent="."):
     """
     if template not in TEMPLATES:
         raise ScaffoldError("unknown template %r; available: %s\n  hint: `python -m pioweave new --list` shows them" % (template, ", ".join(TEMPLATES)))
-    if not _NAME.match(name or ""):
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise ScaffoldError("invalid project name %r: use a letter, then letters, digits, '_' or '-'\n  hint: for example `python -m pioweave new my-blink`" % (name,))
     module = name.replace("-", "_").lower()
+    if len(name) > MAX_NAME_LENGTH:
+        raise ScaffoldError("invalid project name %r: longer than %d characters\n  hint: choose a shorter name" % (name, MAX_NAME_LENGTH))
+    if module in RESERVED_NAMES or keyword.iskeyword(module) or module in _SHADOW:
+        raise ScaffoldError("invalid project name %r: the module %s.py would be a keyword or would shadow a standard library or project module\n"
+                            "  hint: choose another name, for example `python -m pioweave new my-%s`" % (name, module, module))
     cls = "".join(part.capitalize() for part in re.split(r"[_-]+", name) if part) or "Design"
     if not cls[0].isalpha():
         cls = "Design" + cls
@@ -383,11 +398,14 @@ def scaffold(name, template="blink", parent="."):
                       "Edit the design, change the expected values in the tests, and run them again. Nothing has run on a chip; the emulator is a model.\n"
                       % (name, name, template, description, module, module, module, " and Amaranth" if kind == "amaranth" else "", run_note)),
     }
-    os.makedirs(dest, exist_ok=True)
     written = []
-    for fname, text in files.items():
-        path = os.path.join(dest, fname)
-        with open(path, "w", newline="\n") as fh:
-            fh.write(text)
-        written.append(path)
+    try:
+        os.makedirs(dest, exist_ok=True)
+        for fname, text in files.items():
+            path = os.path.join(dest, fname)
+            with open(path, "w", newline="\n") as fh:
+                fh.write(text)
+            written.append(path)
+    except OSError as e:
+        raise ScaffoldError("cannot write %s: %s" % (dest, e)) from None
     return written

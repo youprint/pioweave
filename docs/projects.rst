@@ -79,7 +79,7 @@ The command line
    python -m pioweave doctor [--strict]                             # check this environment
    python -m pioweave build DESIGN OUTDIR [options]
 
-``DESIGN`` is an example name or ``module:Class`` of your own ``PioDesign`` / ``Elaboratable`` (found through the current directory). It writes the project to ``OUTDIR/project`` and prints ``EMIT {"path": ".../NAME.pio"}``, which is what a bitweave ``generator = [...]`` expects. Options:
+``DESIGN`` is an example name or ``module:Class`` of your own ``PioDesign`` / ``Elaboratable``. ``module`` is imported with the current directory first on ``sys.path`` and its top-level code runs, and the class (or any callable without arguments) is called to make the design: run ``build`` and ``emulate`` only on designs you trust, in a directory you trust, and never pass a ``DESIGN`` that comes from untrusted input. (The chip is checked before the module is imported, so a missing ``--chip`` does not run any code.) It writes the project to ``OUTDIR/project`` and prints ``EMIT {"path": ".../NAME.pio"}``, which is what a bitweave ``generator = [...]`` expects. Options:
 
 .. list-table::
    :header-rows: 1
@@ -93,11 +93,22 @@ The command line
    * - ``--clock-hz N``
      - the state machine clock the C and MicroPython projects ask for
    * - ``--cycles N``, ``--stim GPIO=0101...``
-     - the reference simulation
+     - the reference simulation: ``N`` from 1 to 1,000,000, a waveform is a non-empty string of 0 and 1 for a GPIO from 0 to 47
+   * - ``--max-cycles N``
+     - raise the ceiling of ``--cycles`` (default 1,000,000; the run takes time and memory in proportion to the cycles: 1,000,000 cycles of ``emulate`` took 6 s and 109 MB on the machine of the audit, 10,000,000 took 58 s and 814 MB)
    * - ``--tx W,W,...``, ``--tx-feed CYCLE=WORD``, ``--no-drain``
-     - the host side of the data path
+     - the host side of the data path (words are 32-bit numbers, decimal or ``0x...``)
    * - ``--name NAME``
-     - the program name (default: the example or the lower-cased class name)
+     - the program name (default: the example or the lower-cased class name); see below
+
+Names, errors and what is overwritten
+-------------------------------------
+
+The name is pasted into file names, ``bitweave.toml``, ``CMakeLists.txt``, ``main.c`` and the C symbols ``NAME_program``, so it must be a plain identifier: ASCII letters, digits and ``_``, not starting with a digit, at most 64 characters, and not a keyword of pioasm (``jmp``, ``in``, ``out``, ``wrap`` and so on), C (``int``, ``static`` and so on) or Python. A hyphen is not allowed (``my-prog`` becomes the symbol ``my_prog`` in pioasm's header but not in ``main.c``): use ``my_prog``. The same check runs in ``platform.build``, ``Block.build`` and ``write_project`` (``PioProjectError`` / ``BlockError``), before anything is written and also under ``python -O``; it does not use ``assert``. ``pioweave new`` accepts a hyphen in the project directory name but derives the module name from it, which must not be a keyword or the name of a standard-library module (``json.py`` would shadow ``json``).
+
+Values from the command line or from ``SimOptions`` are checked as well, because they are written into ``bitweave.toml`` and ``main.c``: a waveform of anything but 0 and 1 (a newline in it would add a table to the TOML file), a GPIO above 47, a word that does not fit 32 bits, a cycle count below 1 or above ``--max-cycles``, a clock that is not a positive finite number. A mistake of yours (a bad option, an unknown chip or design, a module that cannot be imported, a file that cannot be written) prints ``error: ...`` on standard error and exits with status 2, with no traceback; set ``PIOWEAVE_TRACEBACK=1`` to see the traceback. Anything the design itself does wrong is a ``PioCompileError`` with the source line.
+
+``build`` overwrites the files it writes (a rebuild into the same directory is what a bitweave generator does) and keeps no other file; edit a generated ``bitweave.toml`` in another place. It refuses to write through a symbolic link, because the write would follow the link and replace whatever it points to.
 
 With bitweave
 -------------

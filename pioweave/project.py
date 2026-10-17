@@ -26,8 +26,34 @@ from amaranth.hdl import ClockDomain, Module
 from amaranth.sim import Simulator
 
 from ._compat import Fragment, clock_period
+from ._validate import DEFAULT_MAX_CYCLES, check_cycles, check_name, check_stim, check_tx_feed, check_words
 
-__all__ = ["SimOptions", "PioProjectError", "find_pioasm", "amaranth_run", "amaranth_waves", "write_project"]
+__all__ = ["SimOptions", "PioProjectError", "check_targets", "find_pioasm", "amaranth_run", "amaranth_waves", "write_project"]
+
+
+def check_targets(plan, build_dir):
+    """Refuse to write a project through a symbolic link: Amaranth's ``plan.execute_local`` opens each file for writing, which replaces an existing file and follows a link to
+    wherever it points (audit S-05). Existing regular files are overwritten, as before (a rebuild into the same directory is what the bitweave generator does).
+
+    Parameters
+    ----------
+    plan : amaranth.build.run.BuildPlan
+        The plan whose files are about to be written.
+    build_dir : str
+        The directory they are written to.
+
+    Raises
+    ------
+    PioProjectError
+        If a file of the plan, or the directory, is a symbolic link.
+    """
+    for target in [build_dir] + [os.path.join(build_dir, name) for name in plan.files]:
+        if os.path.islink(target):
+            raise PioProjectError("%s is a symbolic link: the project is not written through links\n  hint: remove the link, or build into another directory" % target)
+
+
+PIOASM_TIMEOUT = 60
+"""Seconds pioasm may take (it assembles a program of at most 32 instructions)."""
 
 
 @dataclasses.dataclass
@@ -38,6 +64,7 @@ class SimOptions:
     ones); without it the project has no expectations. `cycles`: length of the simulation. `stim`: input waveforms {gpio: "0101..."}. `tx`: words in the TX FIFO at
     cycle 0. `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them. `drain`: the host empties the RX FIFO every cycle.
     `irq_set` / `irq_clear`: [(cycle, flag)] IRQ flags the host raises or lowers at the start of that cycle (before the instruction; clear first, then set).
+    The values are checked when the object is made (`PioProjectError`): `cycles` from 1 to `max_cycles`, waveforms of 0 and 1 for GPIO 0 to 47, 32-bit words, flags 0 to 7.
 
     Parameters
     ----------
@@ -55,6 +82,13 @@ class SimOptions:
         The host empties the RX FIFO every cycle.
     irq_set, irq_clear : tuple of tuple
         ``(cycle, flag)`` pairs: the host raises or lowers an IRQ flag at the start of that cycle.
+    max_cycles : int
+        The ceiling of `cycles` (default 1,000,000): a run takes time and memory in proportion to the number of cycles. Raise it only on purpose.
+
+    Raises
+    ------
+    PioProjectError
+        If a value is out of range or has the wrong type.
     """
     factory: object = None
     cycles: int = 64
@@ -64,10 +98,26 @@ class SimOptions:
     drain: bool = True
     irq_set: tuple = ()
     irq_clear: tuple = ()
+    max_cycles: int = DEFAULT_MAX_CYCLES
+
+    def __post_init__(self):
+        # The values are written into bitweave.toml and main.c: a newline in a waveform would add a table to the TOML file (audit S-03), a word over 32 bits is not valid C (S-08).
+        # `cycles` has a ceiling (`max_cycles`, 1,000,000 by default; --max-cycles on the command line) because the runs are linear in it (audit S-10).
+        try:
+            check_cycles(self.cycles, PioProjectError, self.max_cycles)
+            check_stim(self.stim, PioProjectError)
+            check_words(self.tx, PioProjectError, "tx")
+            check_tx_feed(self.tx_feed, PioProjectError)
+            for what in ("irq_set", "irq_clear"):
+                for item in getattr(self, what):
+                    if len(item) != 2 or not all(isinstance(v, int) and not isinstance(v, bool) for v in item) or item[0] < 0 or not 0 <= item[1] <= 7:
+                        raise PioProjectError("%s entries are (cycle, flag) with a cycle of at least 0 and a flag from 0 to 7, not %r" % (what, item))
+        except TypeError as e:
+            raise PioProjectError("invalid simulation option: %s" % e) from None
 
 
 class PioProjectError(Exception):
-    """The project cannot be written (an unknown project kind)."""
+    """The project cannot be written (an unknown project kind, an invalid name or simulation option, a pioasm that cannot run)."""
 
 
 def find_pioasm():
@@ -76,10 +126,10 @@ def find_pioasm():
     Returns
     -------
     str or None
-        The absolute path, or None when pioasm was not found.
+        The absolute path of an executable file, or None when pioasm was not found.
     """
     for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pioasm")):
-        if c and os.path.exists(c):
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):         # a directory or a file that cannot run is not pioasm (audit S-17)
             return os.path.abspath(c)
     return None
 
@@ -425,9 +475,16 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=(), irq_set=()
         with open(src, "w") as fh:
             fh.write(compiled.program.pio_text())
         out = os.path.join(d, name + "_pio.py")
-        r = subprocess.run([pioasm, "-v", str(platform.pio_version), "-o", "python", src, out], capture_output=True, text=True)
+        try:
+            r = subprocess.run([pioasm, "-v", str(platform.pio_version), "-o", "python", src, out], capture_output=True, text=True, timeout=PIOASM_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise PioProjectError("pioasm did not finish within %d seconds (%s)\n  hint: run `python -m pioweave doctor` to see which pioasm was found" % (PIOASM_TIMEOUT, pioasm)) from None
+        except OSError as e:
+            raise PioProjectError("pioasm cannot be run (%s): %s\n  hint: set PIOASM to the pioasm executable, or use project='pio' or 'pico-c', which do not need it" % (pioasm, e)) from None
         if r.returncode != 0:
             raise PioProjectError("pioasm failed:\n" + r.stderr + "\n  hint: run `python -m pioweave doctor` to see which pioasm was found; the .pio file is written first and can be assembled by hand")
+        if not os.path.isfile(out):
+            raise PioProjectError("pioasm ran but wrote no output file (%s)\n  hint: run `python -m pioweave doctor` to see which pioasm was found" % pioasm)
         with open(out) as fh:
             text = fh.read()
     finally:
@@ -498,8 +555,9 @@ def write_project(plan, compiled, platform, name, project, sim=None):
     Raises
     ------
     PioProjectError
-        If `project` is not one of the three kinds.
+        If `project` is not one of the three kinds, or `name` is not a plain identifier (letters, digits and ``_``, see `pioweave._validate.check_name`).
     """
+    check_name(name, PioProjectError)
     if project not in ("pio", "pico-c", "micropython"):
         raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'\n  hint: pass project=\"pio\" for just the .pio file and the bitweave case")
     sim = sim or SimOptions()

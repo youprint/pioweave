@@ -17,7 +17,11 @@ import os
 import sys
 
 from . import block_cli, designs
-from .project import SimOptions
+from ._validate import DEFAULT_MAX_CYCLES, UsageError, check_clock_hz, check_cycles, check_name, parse_stim, parse_tx, parse_tx_feed
+from .compile import PioCompileError
+from .emulator.core import EmulationError
+from .project import PioProjectError, SimOptions
+from .scaffold import ScaffoldError
 from .platform import PLATFORMS
 
 __all__ = ["main"]
@@ -27,36 +31,57 @@ def _resolve(a):
     if a.design in designs.PROGRAMS:
         cls, chip, stim, cycles, opts = designs.entry(a.design)
         name = a.name or a.design
+        chip = a.chip or chip
     else:
         if ":" not in a.design:
-            raise SystemExit("unknown design %r; available: %s, or give module:Class" % (a.design, ", ".join(sorted(designs.PROGRAMS))))
+            raise UsageError("unknown design %r; available: %s, or give module:Class" % (a.design, ", ".join(sorted(designs.PROGRAMS))))
         mod, _, attr = a.design.partition(":")
-        sys.path.insert(0, os.getcwd())
-        cls = getattr(importlib.import_module(mod), attr)
-        chip, stim, cycles, opts = None, {}, 64, {}
+        if not mod or not attr:
+            raise UsageError("a design is NAME or module:Class, not %r" % a.design)
+        chip, stim, cycles, opts = a.chip, {}, 64, {}
+        if chip not in PLATFORMS:            # before the module is imported: importing runs its code
+            raise UsageError("give --chip (%s)" % ", ".join(sorted(PLATFORMS)))
         name = a.name or attr.lower()
-    chip = a.chip or chip
+        sys.path.insert(0, os.getcwd())
+        try:
+            cls = getattr(importlib.import_module(mod), attr)
+        except ImportError as e:
+            raise UsageError("cannot import %r: %s" % (mod, e)) from None
+        except AttributeError:
+            raise UsageError("module %r has no attribute %r" % (mod, attr)) from None
     if chip not in PLATFORMS:
-        raise SystemExit("give --chip (%s)" % ", ".join(sorted(PLATFORMS)))
+        raise UsageError("give --chip (%s)" % ", ".join(sorted(PLATFORMS)))
+    check_name(name, UsageError)
     stim = dict(stim)
     for item in a.stim or []:
-        g, _, w = item.partition("=")
-        stim[int(g)] = w
+        g, w = parse_stim(item)
+        stim[g] = w
     opts = dict(opts)
     if a.tx:
-        opts["tx"] = [int(w, 0) for w in a.tx.split(",")]
+        opts["tx"] = parse_tx(a.tx)
     if a.tx_feed:
-        opts["tx_feed"] = [(int(c), int(w, 0)) for c, _, w in (item.partition("=") for item in a.tx_feed)]
+        opts["tx_feed"] = [parse_tx_feed(item) for item in a.tx_feed]
     if a.no_drain:
         opts["drain"] = False
-    return cls, chip, stim, a.cycles or cycles, name, opts
+    max_cycles = getattr(a, "max_cycles", None) or DEFAULT_MAX_CYCLES
+    cycles = check_cycles(a.cycles if a.cycles is not None else cycles, UsageError, max_cycles, "--cycles" if a.cycles is not None else "cycles")
+    return cls, chip, stim, cycles, name, opts
+
+
+def _make(cls):
+    """Make the design: ``cls()``. A design is code the user wrote; what it raises becomes a message."""
+    try:
+        return cls()
+    except SystemExit as e:
+        raise UsageError("the design %r exited instead of returning a design (%s)" % (getattr(cls, "__name__", cls), e.code)) from None
 
 
 def _emulate(a):
     from .compile import compile_design
     from .emulator import run_compiled, to_vcd
-    cls, chip, stim, cycles, name, opts = _resolve(argparse.Namespace(design=a.design, name=None, chip=a.chip, stim=a.stim, cycles=a.cycles, tx=a.tx, tx_feed=a.tx_feed, no_drain=a.no_drain))
-    compiled = compile_design(cls(), PLATFORMS[chip](), name)
+    cls, chip, stim, cycles, name, opts = _resolve(argparse.Namespace(design=a.design, name=None, chip=a.chip, stim=a.stim, cycles=a.cycles, max_cycles=a.max_cycles, tx=a.tx,
+                                                                      tx_feed=a.tx_feed, no_drain=a.no_drain))
+    compiled = compile_design(_make(cls), PLATFORMS[chip](), name)
     res = run_compiled(compiled, cycles, stim, opts.get("tx", ()), opts.get("tx_feed", ()), opts.get("drain", True))
     print(compiled.program.pio_text())
     for g in compiled.output_gpios:
@@ -93,14 +118,15 @@ def _new(a):
         print("\n".join("%-15s %s" % (k, scaffold.TEMPLATES[k][0]) for k in scaffold.template_names()))
         return 0
     if not a.name:
-        raise SystemExit("give a project name, for example: python -m pioweave new my-blink   (python -m pioweave new --list shows the templates)")
-    try:
-        files = scaffold.scaffold(a.name, a.template, a.dir)
-    except scaffold.ScaffoldError as e:
-        raise SystemExit("error: %s" % e)
+        raise UsageError("give a project name, for example: python -m pioweave new my-blink   (python -m pioweave new --list shows the templates)")
+    files = scaffold.scaffold(a.name, a.template, a.dir)
     print("created %s with %s" % (os.path.dirname(files[0]), ", ".join(os.path.basename(f) for f in files)))
     print("next: cd %s && python -m unittest" % os.path.dirname(files[0]))
     return 0
+
+
+# What is a mistake of the user (or of the design they wrote) and not a bug of pioweave: printed as `error: ...`, exit status 2. PIOWEAVE_TRACEBACK=1 shows the traceback instead.
+_USER_ERRORS = (PioProjectError, PioCompileError, EmulationError, ScaffoldError, UsageError, ValueError, KeyError, OSError, ImportError, AttributeError, TypeError, RecursionError, OverflowError, EOFError)
 
 
 def _version():
@@ -130,6 +156,7 @@ def main(argv=None):
     em.add_argument("design")
     em.add_argument("--chip")
     em.add_argument("--cycles", type=int, default=None)
+    em.add_argument("--max-cycles", type=int, default=None, help="raise the ceiling of --cycles (default %d)" % DEFAULT_MAX_CYCLES)
     em.add_argument("--stim", action="append", help="input waveform GPIO=0101...")
     em.add_argument("--tx", help="words in the TX FIFO at cycle 0, comma separated (decimal or 0x...)")
     em.add_argument("--tx-feed", action="append", help="CYCLE=WORD")
@@ -144,12 +171,24 @@ def main(argv=None):
     b.add_argument("--project", default="pio", choices=["pio", "pico-c", "micropython"])
     b.add_argument("--clock-hz", type=int, default=None, help="state machine clock the C / MicroPython project asks for")
     b.add_argument("--cycles", type=int, default=None, help="length of the reference simulation")
+    b.add_argument("--max-cycles", type=int, default=None, help="raise the ceiling of --cycles (default %d)" % DEFAULT_MAX_CYCLES)
     b.add_argument("--stim", action="append", help="input waveform GPIO=0101...")
     b.add_argument("--tx", help="words in the TX FIFO at cycle 0, comma separated (decimal or 0x...)")
     b.add_argument("--tx-feed", action="append", help="CYCLE=WORD: a word the host writes into the TX FIFO so that the instruction of that cycle sees it")
     b.add_argument("--no-drain", action="store_true", help="the host does not empty the RX FIFO (it can fill up)")
     b.add_argument("--name")
     a = ap.parse_args(argv)
+    try:
+        return _dispatch(a)
+    except _USER_ERRORS as e:
+        if os.environ.get("PIOWEAVE_TRACEBACK") == "1":
+            raise
+        text = e.args[0] if isinstance(e, KeyError) and e.args else e
+        print("error: %s" % (text,), file=sys.stderr)
+        return 2
+
+
+def _dispatch(a):
     if a.cmd == "new":
         return _new(a)
     if a.cmd in ("emulate", "build") and block_cli.is_block(a.design):        # an example block (several state machines): pioweave/block_cli.py
@@ -163,10 +202,12 @@ def main(argv=None):
         print("\n".join(["%s (%s)" % (k, v[1]) for k, v in sorted(designs.PROGRAMS.items())] + block_cli.list_blocks()))
         return 0
     cls, chip, stim, cycles, name, opts = _resolve(a)
-    factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=a.clock_hz))  # noqa: E731
+    check_clock_hz(a.clock_hz, UsageError)
+    factory = lambda: (_make(cls), PLATFORMS[chip](sm_clock_hz=a.clock_hz))  # noqa: E731
+    sim = SimOptions(factory=factory, cycles=cycles, stim=stim, max_cycles=max(a.max_cycles or 0, DEFAULT_MAX_CYCLES), **opts)    # checks the values before a design is made
     design, platform = factory()
     out = os.path.join(a.outdir, "project")
-    platform.build(design, name, out, project=a.project, sim=SimOptions(factory=factory, cycles=cycles, stim=stim, **opts))
+    platform.build(design, name, out, project=a.project, sim=sim)
     print("EMIT " + json.dumps({"path": os.path.join(out, name + ".pio")}))
     return 0
 

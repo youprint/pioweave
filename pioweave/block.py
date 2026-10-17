@@ -28,10 +28,11 @@ from amaranth.hdl import Cat, ClockDomain, Const, Module, Signal
 from amaranth.sim import Simulator
 
 from ._compat import Fragment, ast, clock_period, fsm_state_names
+from ._validate import DEFAULT_MAX_CYCLES, check_cycles, check_name, check_stim, check_tx_feed, check_words
 from .compile import PioCompileError, compile_design
 from .data import IrqModel
 from .platform import RP2040PioPlatform
-from .project import PioProjectError, _c_sm_config, _cmake, _toml_case
+from .project import PioProjectError, _c_sm_config, _cmake, _toml_case, check_targets
 
 __all__ = ["BlockError", "Machine", "Block", "BlockSim", "BlockCompiled", "IrqHub", "IrqPort", "block_run", "emulate_block", "machine_cases", "MAX_MACHINES", "MEMORY_WORDS"]
 
@@ -178,6 +179,13 @@ class BlockSim:
         ``{machine name: bool}``: the host empties that machine's RX FIFO every cycle (default True).
     irq_set, irq_clear : tuple of tuple
         ``(cycle, flag)`` pairs: the host raises or lowers a flag of the shared flag register at the start of that cycle.
+    max_cycles : int
+        The ceiling of `cycles` (default 1,000,000).
+
+    Raises
+    ------
+    BlockError
+        If a value is out of range: `cycles` from 1 to `max_cycles`, waveforms of 0 and 1, 32-bit words.
     """
     cycles: int = 64
     stim: dict = dataclasses.field(default_factory=dict)
@@ -186,6 +194,19 @@ class BlockSim:
     drain: dict = dataclasses.field(default_factory=dict)
     irq_set: tuple = ()
     irq_clear: tuple = ()
+    max_cycles: int = DEFAULT_MAX_CYCLES
+
+    def __post_init__(self):
+        # the values are written into bitweave.toml and main.c (audit S-03, S-08); `cycles` has the ceiling `max_cycles` (S-10)
+        try:
+            check_cycles(self.cycles, BlockError, self.max_cycles)
+            check_stim(self.stim, BlockError)
+            for words in self.tx.values():
+                check_words(words, BlockError, "tx")
+            for feed in self.tx_feed.values():
+                check_tx_feed(feed, BlockError)
+        except (TypeError, AttributeError) as e:
+            raise BlockError("invalid simulation option: %s" % e) from None
 
 
 def _decode_writes(word, cfg, prog, dirs=False):
@@ -454,11 +475,12 @@ class Block:
         Raises
         ------
         BlockError
-            If the block cannot be compiled.
+            If the block cannot be compiled, or `name` is not a plain identifier (letters, digits and ``_``, not starting with a digit, not a keyword).
         pioweave.project.PioProjectError
             If `project` is not valid.
         """
         from amaranth.build.run import BuildPlan
+        check_name(name, BlockError)
         if project == "micropython":
             raise PioProjectError("project='micropython' is not written for a block: rp2.StateMachine takes one decorated program per machine and has no call to start several machines in "
                                   "step or to raise IRQ flags [verify]; use project='pico-c' (pio_enable_sm_mask_in_sync starts them together)")
@@ -494,7 +516,10 @@ class Block:
         if not name:
             raise BlockError("give the project name")
         plan = self.prepare(name, project, sim)
-        return plan.execute_local(build_dir) if do_build else plan
+        if not do_build:
+            return plan
+        check_targets(plan, build_dir)
+        return plan.execute_local(build_dir)
 
 
 # ----------------------------------------------------------------------------- the reference simulation (Amaranth)

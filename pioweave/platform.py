@@ -457,14 +457,16 @@ class _RPPioPlatform(Platform):
         pioweave.compile.PioCompileError
             If the design is outside the subset the compiler accepts.
         pioweave.project.PioProjectError
-            If `project` is not one of the three kinds.
+            If `project` is not one of the three kinds, or `name` is not a plain identifier (ASCII letters, digits and ``_``, not starting with a digit, not a keyword).
         """
         if do_program:
             raise NotImplementedError("loading a board is done by bitweave (program --pico --yes), never by the platform")
+        from .project import check_targets
         sim = self._sim_options(sim, legacy)
         plan = self.prepare(elaboratable, name, project=project, sim=sim)
         if not do_build:
             return plan
+        check_targets(plan, build_dir)
         return plan.execute_local(build_dir)
 
     def _sim_options(self, sim, legacy):
@@ -499,8 +501,10 @@ class _RPPioPlatform(Platform):
         amaranth.build.run.BuildPlan
             The plan.
         """
+        from ._validate import check_name
         from .compile import compile_design
-        from .project import write_project
+        from .project import PioProjectError, write_project
+        check_name(name, PioProjectError)
         compiled = compile_design(elaboratable, self, name)
         plan = BuildPlan(script="build_" + name)
         write_project(plan, compiled, self, name, project, sim)

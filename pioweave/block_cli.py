@@ -7,6 +7,7 @@ import json
 import os
 
 from . import block_designs
+from ._validate import UsageError, check_clock_hz, check_cycles, parse_stim
 from .block import Block, emulate_block
 from .platform import PLATFORMS
 
@@ -47,17 +48,19 @@ def list_blocks():
 def _entry(a):
     for what in ("tx", "tx_feed", "no_drain"):
         if getattr(a, what, None):
-            raise SystemExit("--%s is not available for a block: the words per machine are part of the example (pioweave.block.BlockSim)" % what.replace("_", "-"))
-    block, sim = block_designs.entry(a.design, a.chip)
+            raise UsageError("--%s is not available for a block: the words per machine are part of the example (pioweave.block.BlockSim)" % what.replace("_", "-"))
     if a.chip and a.chip not in PLATFORMS:
-        raise SystemExit("unknown chip %r (%s)" % (a.chip, ", ".join(sorted(PLATFORMS))))
-    if getattr(a, "clock_hz", None):
-        block = Block(block.machines, block.platform, sm_clock_hz=a.clock_hz, name=block.name)
-    if a.cycles:
-        sim.cycles = a.cycles
+        raise UsageError("unknown chip %r (%s)" % (a.chip, ", ".join(sorted(PLATFORMS))))
+    block, sim = block_designs.entry(a.design, a.chip)
+    clock_hz = getattr(a, "clock_hz", None)
+    if clock_hz is not None:
+        block = Block(block.machines, block.platform, sm_clock_hz=check_clock_hz(clock_hz, UsageError), name=block.name)
+    sim.max_cycles = getattr(a, "max_cycles", None) or sim.max_cycles
+    if a.cycles is not None:
+        sim.cycles = check_cycles(a.cycles, UsageError, sim.max_cycles, "--cycles")
     for item in a.stim or []:
-        g, _, w = item.partition("=")
-        sim.stim[int(g)] = w
+        g, w = parse_stim(item)
+        sim.stim[g] = w
     return block, sim
 
 
