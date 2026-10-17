@@ -254,7 +254,7 @@ def to_vcd(trace, pins, name="pio", timescale="1 ns"):
     #4
     """
     lines = ["$timescale %s $end" % timescale, "$scope module %s $end" % name]
-    ids = {pin: chr(33 + i) for i, pin in enumerate(pins)}
+    ids = {pin: chr(33 + i + (i >= 3)) for i, pin in enumerate(pins)}          # printable ASCII from "!", skipping "$" (it starts the keywords)
     for pin, ident in ids.items():
         lines.append("$var wire 1 %s pin%d $end" % (ident, pin))
     lines += ["$upscope $end", "$enddefinitions $end"]

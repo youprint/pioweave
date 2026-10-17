@@ -596,3 +596,15 @@ class RestartTests(support.TestCase):
         self.assertEqual(sm.x, 9)
         b.step()
         self.assertEqual(sm.x, 5)
+
+
+class VcdTests(support.TestCase):
+    def test_identifiers_avoid_the_dollar_sign_and_are_unique(self):
+        # COR-39: the fourth pin got "$", which is legal in the VCD grammar but starts the keywords ($var, $end) and confuses some viewers
+        p = prog()
+        p.set(PINS, 31)
+        r = run_case(p, 2, set_base=0, set_count=5, dirs=31, record=True)
+        text = to_vcd(r.trace, [0, 1, 2, 3, 4])
+        idents = [line.split()[3] for line in text.splitlines() if line.startswith("$var")]
+        self.assertEqual(len(set(idents)), 5)
+        self.assertNotIn("$", "".join(idents))
