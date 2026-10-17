@@ -195,6 +195,39 @@ From the command line
 
 compiles an example design (or ``module:Class``), runs it in the emulator and prints the program, the output pin waveforms, the words received and, with ``--vcd``, writes a waveform file.
 
+Checking a bitweave case
+------------------------
+
+bitweave can ask the emulator for a second opinion on a simulation case. In a ``[pio.NAME]`` section of ``bitweave.toml``, ``cross_check = "pioweave"`` makes bitweave run, for every ``[[pio.NAME.sim]]`` case after its own simulator, ::
+
+   python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON
+
+``PROGRAM_JSON`` is the file ``pioasm -o json`` writes (programs with ``name``, ``pioVersion``, ``wrapTarget``, ``wrap``, ``origin``, ``sideset``, ``instructions`` and ``usedGPIORanges``) and ``CASE_JSON`` is the case as a JSON object with the keys of bitweave's case (``cycles``, ``start_pc``, ``x``, ``y``, the pin mapping, shift and FIFO settings, ``tx``, ``tx_feed``, ``rx_drain``, ``rx_regs``, ``dirs``, ``pins_in``, ``irq_set``, ``irq_clear``, ``sync_cycles``, ``gpio_base``, ``sm`` and the ``expect*`` keys). The case runs with the semantics bitweave documents: state machine ``sm`` of one block, the 32-pin window, no input synchroniser unless ``sync_cycles`` says so, the host draining the RX FIFO after every cycle unless ``rx_drain`` is false, ``set_count`` 0 when the case does not give it (the SDK's default configuration; the register reset value of 5 applies only to a state machine whose PINCTRL was never written), and the ``loopback="direct"`` convention. One JSON object is printed on standard output:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Key
+     - Content
+   * - ``ok``
+     - no error and every ``expect*`` of the case holds
+   * - ``error``, ``error_cycle``
+     - the message (``cycle N: ...`` for a run-time error) and its cycle, or null
+   * - ``cycles``
+     - the cycles of the case
+   * - ``pads``, ``dirs``
+     - ``{pin: waveform}`` (one 0 or 1 per cycle run) for every pin in ``expect`` / ``expect_dirs`` and every pin the program drives
+   * - ``rx``, ``rx_left``, ``tx_left``
+     - the words the draining host read with their cycles, the words left in the RX FIFO, the words left in the TX FIFO
+   * - ``final``
+     - ``x``, ``y``, ``pc`` (relative to the program, unsigned 32 bit), ``isr``, ``osr``, ``irq_flags``
+   * - ``unsupported``
+     - keys of the case this version does not know; they are not applied, so the result says nothing about them
+   * - ``mismatches``
+     - the first expectations that did not hold
+
+The exit status is 0 whenever a result was produced, even when the program errored (an error is data), and 2 on a usage error. The same function is ``pioweave.emulator.check.check_case(programs, case)``. bitweave compares ok / error, the per-cycle pad and direction waveforms, the words with their cycles, the FIFO counts and the final registers, and reports the first differences in its stage ``xcheck:CASE``. Two models written from the same datasheets that agree are still models: nothing has run on a chip.
+
 How it was checked
 ------------------
 
@@ -210,6 +243,9 @@ How it was checked
    * - ``tests/test_emulator_datasheet.py``
      - the facts that were [verify] before they were read in the datasheets (reset values, output priority, synchroniser, divider, joins, MOV STATUS, IRQ flags, delay and side-set, EXEC and forced instructions), each test naming the section and page
      - nothing
+   * - ``tests/test_emulator_check.py``
+     - ``python -m pioweave.emulator.check`` directed (result fields, exit status, unsupported keys, errors as data, usage errors) and differential: the same random programs and cases run through bitweave's own ``pio`` flow and through the check must agree on ok / error, the pad and direction waveforms, the words received, the FIFO counts and the final registers
+     - for the differential part, the ``bitweave`` binary and ``pioasm``
    * - ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``
      - the ``emulate`` API, and behaviours that another emulator documents (pin ranges that wrap after GPIO 31, thresholds of PUSH IFFULL and PULL IFEMPTY, stalls and delays, several state machines, shift directions), worked out fresh from the datasheets
      - nothing (matplotlib for one plot test, skipped without it)

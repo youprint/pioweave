@@ -18,6 +18,7 @@ Added
 - ``examples/``: runnable examples (blink on a board LED, a UART transmitter and receiver, a WS2812-style waveform, a square wave generator, a unittest of a program in the emulator), run by ``tests/test_examples.py`` and described in ``docs/examples.rst``.
 - The version gate: ``import pioweave`` accepts Amaranth 0.5.0 to 0.5.10 and one tested 0.6 development commit (``UnsupportedAmaranth``, ``PIOWEAVE_ALLOW_UNTESTED=1``), and ``scripts/matrix.sh`` runs the suite against other versions.
 - Error messages of the builder, the compiler, the project writer and the version gate carry a short ``hint:`` line with what to change for the most common mistakes; the original text is unchanged.
+- ``python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON`` (``pioweave.emulator.check.check_case`` and ``main``): runs one bitweave simulation case, given as the JSON ``pioasm -o json`` writes and the case as a JSON object, in the emulator and prints one JSON object (``ok``, ``error``, the pad and direction waveforms, the words received, the FIFO counts, the final registers, the keys it does not support), so that bitweave's ``cross_check = "pioweave"`` can compare the two simulators; tested directly and against bitweave's ``pio`` flow on random programs.
 - Documentation in reStructuredText (Sphinx, with the examples run by ``sphinx-build -b doctest``): getting started, designing for PIO, the data path, the builder, the emulator, boards, projects, compatibility, testing, examples, releasing, the API reference and the design notes.
 
 Changed

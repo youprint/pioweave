@@ -21,3 +21,9 @@ Unit tests and waveforms
 
 .. automodule:: pioweave.emulator.trace
    :members: State, emulate, count_cycles, pin_history, waveform_text, plot_waveform
+
+Checking a bitweave case
+------------------------
+
+.. automodule:: pioweave.emulator.check
+   :members: check_case, main
