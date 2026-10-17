@@ -1,0 +1,8 @@
+; 8N1 UART transmitter, 8 cycles per bit. Side-set drives the line (idle and stop bits high, start bit low).
+.program uart_tx
+.side_set 1 opt
+    pull       side 1 [7]     ; idle high, wait for a byte
+    set x, 7   side 0 [7]     ; start bit
+bitloop:
+    out pins, 1               ; data bit, LSB first
+    jmp x-- bitloop [6]

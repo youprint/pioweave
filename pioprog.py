@@ -1,0 +1,502 @@
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+"""Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (design note docs/pio-dsl.md).
+
+A `Program` is built with one method per PIO instruction, in the style of an Amaranth description: statements in program order, names as
+constants, errors raised when the program is built, not when the chip runs it. It produces
+
+  program.pio_text()   pioasm source (assembled by pioasm, which bitweave runs: `bitweave pio NAME` with a `generator`)
+  program.words()      the 16-bit instruction words, encoded here from the datasheet tables (RP2040 datasheet chapter 3, RP2350
+                       datasheet chapter 11), independently of pioasm, so the two can be compared (tests/test_pioprog.py)
+
+Facts used: the instruction encodings, the directive and instruction syntax of pioasm as printed in the datasheets. No third-party code.
+Host software only: nothing here runs on a chip or in an FPGA.
+
+    p = Program("square", chip="rp2040")
+    with p.wrapped():
+        p.set(PINS, 1, delay=1)
+        p.set(PINS, 0, delay=1)
+    print(p.pio_text())
+"""
+from contextlib import contextmanager
+
+# the RP2354 is an RP2350 with 2 MB of flash in the package; the A (QFN-60, 30 GPIOs) and B (QFN-80, 48 GPIOs) variants differ only in the pinout (RP2350 datasheet, Table 1)
+CHIP_VERSION = {"rp2040": 0, "rp2350": 1, "rp2350a": 1, "rp2350b": 1, "rp2354": 1, "rp2354a": 1, "rp2354b": 1}
+MEMORY_WORDS = 32                                         # shared instruction memory of one PIO block
+
+
+class PioError(ValueError):
+    """The program is not valid for the chosen chip."""
+
+
+class _Name:
+    """A named operand (register, condition, ...); compares and prints by name."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return self.name
+
+
+# registers and destinations
+PINS, X, Y, NULL, ISR, OSR, PC, EXEC, PINDIRS, STATUS = (_Name(n) for n in ("pins", "x", "y", "null", "isr", "osr", "pc", "exec", "pindirs", "status"))
+
+# JMP conditions: (text, code)
+ALWAYS = _Name("always")
+NOT_X, X_DEC, NOT_Y, Y_DEC, X_NE_Y, PIN, NOT_OSRE = (_Name(n) for n in ("not_x", "x_dec", "not_y", "y_dec", "x_ne_y", "pin", "not_osre"))
+_COND = {ALWAYS: ("", 0), NOT_X: ("!x", 1), X_DEC: ("x--", 2), NOT_Y: ("!y", 3), Y_DEC: ("y--", 4), X_NE_Y: ("x!=y", 5), PIN: ("pin", 6), NOT_OSRE: ("!osre", 7)}
+
+# MOV operations
+NONE, INVERT, REVERSE = (_Name(n) for n in ("none", "invert", "reverse"))
+_MOV_OP = {NONE: ("", 0), INVERT: ("!", 1), REVERSE: ("::", 2)}
+
+# IRQ modes: set the flag, set it and wait until it is cleared, clear it
+SET, WAIT, CLEAR = (_Name(n) for n in ("set", "wait", "clear"))
+
+_IN_SRC = {PINS: 0, X: 1, Y: 2, NULL: 3, ISR: 6, OSR: 7}
+_OUT_DST = {PINS: 0, X: 1, Y: 2, NULL: 3, PINDIRS: 4, PC: 5, ISR: 6, EXEC: 7}
+_MOV_DST = {PINS: 0, X: 1, Y: 2, PINDIRS: 3, EXEC: 4, PC: 5, ISR: 6, OSR: 7}
+_MOV_SRC = {PINS: 0, X: 1, Y: 2, NULL: 3, STATUS: 5, ISR: 6, OSR: 7}
+_SET_DST = {PINS: 0, X: 1, Y: 2, PINDIRS: 4}
+
+
+class _Instr:
+    def __init__(self, kind, side, delay, **f):
+        self.kind, self.side, self.delay, self.f = kind, side, delay, f
+        self.labels = []          # labels placed before this instruction
+        self.wrap_target = False  # execution wraps to this instruction
+        self.wrap_top = False     # the program wraps after this instruction
+
+
+def _int(v, lo, hi, what):
+    if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+        raise PioError("%s must be an integer from %d to %d, got %r" % (what, lo, hi, v))
+    return v
+
+
+def _pick(table, v, what):
+    if v not in table:
+        raise PioError("%s %r is not allowed here; use one of: %s" % (what, v, ", ".join(repr(k) for k in table)))
+    return table[v]
+
+
+class Program:
+    """One PIO program. `chip` is rp2040, rp2350 or rp2354 and decides which instructions and directives are legal."""
+
+    def __init__(self, name, chip="rp2040", side_set=0, side_opt=False, side_pindirs=False, origin=None, emit_version=True):
+        if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
+            raise PioError("program name %r must be alphanumeric/underscore and not start with a digit" % (name,))
+        if chip not in CHIP_VERSION:
+            raise PioError("chip %r: use rp2040, rp2350, rp2350a, rp2350b, rp2354, rp2354a or rp2354b" % (chip,))
+        self.name, self.chip, self.version = name, chip, CHIP_VERSION[chip]
+        self.emit_version = emit_version
+        self.side_count, self.side_opt, self.side_pindirs = _int(side_set, 0, 5, "side_set"), bool(side_opt), bool(side_pindirs)
+        if self.side_count + (1 if self.side_opt and self.side_count else 0) > 5:
+            raise PioError("side_set %d with an enable bit leaves no room (5 bits shared with the delay)" % self.side_count)
+        if (self.side_opt or self.side_pindirs) and self.side_count == 0:
+            raise PioError("side_opt / side_pindirs need side_set >= 1")
+        self.origin = None if origin is None else _int(origin, 0, 31, "origin")
+        self.clock_div = None
+        self.fifo_config = None
+        self.status_cfg = None
+        self.in_cfg = self.out_cfg = None
+        self.set_count = None
+        self.defines = []
+        self._instrs = []
+        self._pending_labels = []
+        self._pending_wrap_target = False
+        self._wrap_target_set = self._wrap_set = False
+        self._label_names = set()
+
+    # ---- directives that change the default state machine configuration (pioasm; they only affect the generated C header)
+    def _before_code(self, what):
+        if self._instrs:
+            raise PioError("%s must come before the first instruction (pioasm rule)" % what)
+
+    def clock_divider(self, divider):
+        self._before_code("clock_divider")
+        if not isinstance(divider, (int, float)) or isinstance(divider, bool) or divider <= 0:
+            raise PioError("clock divider must be a positive number")
+        self.clock_div = divider
+
+    def fifo(self, config):
+        self._before_code("fifo")
+        names = ("txrx", "tx", "rx") + (("txput", "txget", "putget") if self.version >= 1 else ())
+        if config not in names:
+            raise PioError("fifo %r on %s: use %s (txput, txget and putget need PIO version 1, RP2350 / RP2354)" % (config, self.chip, ", ".join(names)))
+        self.fifo_config = config
+
+    def mov_status(self, kind, n, which=None):
+        """kind 'rxfifo' or 'txfifo' (level below n), or 'irq' (flag n is set; RP2350 / RP2354 only; which None, 'prev' or 'next')."""
+        self._before_code("mov_status")
+        if kind in ("rxfifo", "txfifo"):
+            self.status_cfg = ".mov_status %s < %d" % (kind, _int(n, 0, 15, "mov_status level"))
+        elif kind == "irq":
+            if self.version < 1:
+                raise PioError("mov_status irq needs PIO version 1 (RP2350 / RP2354)")
+            if which not in (None, "prev", "next"):
+                raise PioError("mov_status irq which must be None, 'prev' or 'next'")
+            self.status_cfg = ".mov_status irq %sset %d" % (which + " " if which else "", _int(n, 0, 7, "mov_status irq flag"))
+        else:
+            raise PioError("mov_status kind must be 'rxfifo', 'txfifo' or 'irq'")
+
+    def _shift_cfg(self, what, count, direction, auto, threshold):
+        self._before_code(".%s" % what)
+        if self.version < 1 and count != 32 and what in ("in", "out"):
+            raise PioError(".%s count must be 32 on PIO version 0 (pioasm rule)" % what)
+        _int(count, 1 if what != "set" else 0, 32 if what != "set" else 5, ".%s count" % what)
+        if direction not in (None, "left", "right"):
+            raise PioError("direction must be None, 'left' or 'right'")
+        if threshold is not None:
+            _int(threshold, 1, 32, "threshold")
+            if not auto:
+                raise PioError("a threshold needs auto = True")
+        return ".%s %d%s%s%s" % (what, count, " " + direction if direction else "", " auto" if auto else "", " %d" % threshold if threshold is not None else "")
+
+    def config_in(self, count, direction=None, auto=False, threshold=None):
+        self.in_cfg = self._shift_cfg("in", count, direction, auto, threshold)
+
+    def config_out(self, count, direction=None, auto=False, threshold=None):
+        self.out_cfg = self._shift_cfg("out", count, direction, auto, threshold)
+
+    def config_set(self, count):
+        self._before_code(".set")
+        _int(count, 0, 5, ".set count")
+        self.set_count = count
+
+    def define(self, symbol, value, public=False):
+        if not symbol or not symbol.replace("_", "a").isalnum() or symbol[0].isdigit():
+            raise PioError("symbol %r must be alphanumeric/underscore" % (symbol,))
+        self.defines.append((symbol, _int(value, -(1 << 31), (1 << 32) - 1, "define value"), bool(public)))
+
+    # ---- structure
+    def label(self, name):
+        """Name the next instruction; usable as a JMP target before or after this point."""
+        if not name or not name.replace("_", "a").isalnum() or name[0].isdigit():
+            raise PioError("label %r must be alphanumeric/underscore and not start with a digit" % (name,))
+        if name in self._label_names:
+            raise PioError("label %r is defined twice" % name)
+        self._label_names.add(name)
+        self._pending_labels.append(name)
+        return name
+
+    def wrap_target(self):
+        """Execution continues here after the wrap point (default: the first instruction)."""
+        if self._wrap_target_set:
+            raise PioError("wrap_target may be used only once")
+        self._wrap_target_set = True
+        self._pending_wrap_target = True
+
+    def wrap(self):
+        """The instruction just written is the last of the loop: after it execution wraps (default: the last instruction)."""
+        if self._wrap_set:
+            raise PioError("wrap may be used only once")
+        if not self._instrs:
+            raise PioError("wrap needs an instruction before it")
+        self._wrap_set = True
+        self._instrs[-1].wrap_top = True
+
+    @contextmanager
+    def wrapped(self):
+        """`with p.wrapped():` makes the instructions inside the wrap loop."""
+        self.wrap_target()
+        yield
+        self.wrap()
+
+    # ---- instructions (every one takes side= and delay=)
+    def _add(self, kind, side, delay, **f):
+        ds_bits = 5 - self.side_count - (1 if self.side_opt else 0)
+        _int(delay, 0, (1 << ds_bits) - 1, "delay (%d bit%s left after the side-set)" % (ds_bits, "" if ds_bits == 1 else "s"))
+        if side is None:
+            if self.side_count and not self.side_opt:
+                raise PioError("this program has a mandatory side-set: give side= (0..%d) on every instruction" % ((1 << self.side_count) - 1))
+        else:
+            if not self.side_count:
+                raise PioError("side= given but the program has side_set=0")
+            _int(side, 0, (1 << self.side_count) - 1, "side")
+        ins = _Instr(kind, side, delay, **f)
+        ins.labels, self._pending_labels = self._pending_labels, []
+        ins.wrap_target, self._pending_wrap_target = self._pending_wrap_target, False
+        self._instrs.append(ins)
+        if len(self._instrs) > MEMORY_WORDS:
+            raise PioError("more than %d instructions: the PIO instruction memory has %d words" % (MEMORY_WORDS, MEMORY_WORDS))
+        return ins
+
+    def nop(self, side=None, delay=0):
+        self._add("nop", side, delay)
+
+    def jmp(self, target, when=ALWAYS, side=None, delay=0):
+        _pick(_COND, when, "jmp condition")
+        if not isinstance(target, (str, int)) or isinstance(target, bool):
+            raise PioError("jmp target must be a label name or an address")
+        if isinstance(target, int):
+            _int(target, 0, 31, "jmp address")
+        self._add("jmp", side, delay, target=target, cond=when)
+
+    def _wait(self, pol, src, idx, side, delay, rel=False, mode=None):
+        _int(pol, 0, 1, "wait polarity")
+        self._add("wait", side, delay, pol=pol, src=src, idx=idx, rel=rel, mode=mode)
+
+    def wait_gpio(self, polarity, gpio, side=None, delay=0):
+        """Wait on a real GPIO number: 0 to 31, or 0 to 47 on PIO version 1 (RP2350 / RP2354; the B variants have 48 GPIOs)."""
+        self._wait(polarity, "gpio", _int(gpio, 0, 47 if self.version >= 1 else 31, "GPIO number"), side, delay)
+
+    def wait_pin(self, polarity, pin, side=None, delay=0):
+        """Wait on input pin `pin` of the state machine's IN mapping (IN_BASE + pin)."""
+        self._wait(polarity, "pin", _int(pin, 0, 31, "pin index"), side, delay)
+
+    def wait_irq(self, polarity, flag, rel=False, other=None, side=None, delay=0):
+        """`other` selects the neighbouring PIO block ('prev' or 'next', RP2350 / RP2354 only; no rel)."""
+        self._irq_target(flag, rel, other)
+        self._wait(polarity, "irq", flag, side, delay, rel=rel, mode=other)
+
+    def wait_jmppin(self, polarity, offset=0, side=None, delay=0):
+        if self.version < 1:
+            raise PioError("wait jmppin needs PIO version 1 (RP2350 / RP2354)")
+        self._wait(polarity, "jmppin", _int(offset, 0, 3, "jmppin offset"), side, delay)
+
+    def in_(self, src, bits, side=None, delay=0):
+        _pick(_IN_SRC, src, "in source")
+        self._add("in", side, delay, src=src, bits=_int(bits, 1, 32, "in bit count"))
+
+    def out(self, dst, bits, side=None, delay=0):
+        _pick(_OUT_DST, dst, "out destination")
+        self._add("out", side, delay, dst=dst, bits=_int(bits, 1, 32, "out bit count"))
+
+    def push(self, iffull=False, block=True, side=None, delay=0):
+        if self.fifo_config not in (None, "txrx", "rx"):
+            raise PioError("push needs fifo txrx or rx, this program has fifo %s (pioasm rule)" % self.fifo_config)
+        self._add("push", side, delay, iff=bool(iffull), blk=bool(block))
+
+    def pull(self, ifempty=False, block=True, side=None, delay=0):
+        self._add("pull", side, delay, ife=bool(ifempty), blk=bool(block))
+
+    def mov(self, dst, src, op=NONE, side=None, delay=0):
+        _pick(_MOV_DST, dst, "mov destination")
+        _pick(_MOV_SRC, src, "mov source")
+        _pick(_MOV_OP, op, "mov operation")
+        if dst is PINDIRS and self.version < 1:
+            raise PioError("mov pindirs needs PIO version 1 (RP2350 / RP2354)")
+        self._add("mov", side, delay, dst=dst, src=src, op=op)
+
+    def mov_put(self, index, side=None, delay=0):
+        """mov rxfifo[index], isr (RP2350 / RP2354). `index` is 0..3 or Y."""
+        self._rx_index(index, True)
+        self._add("movrx", side, delay, put=True, index=index)
+
+    def mov_get(self, index, side=None, delay=0):
+        """mov osr, rxfifo[index] (RP2350 / RP2354). `index` is 0..3 or Y."""
+        self._rx_index(index, False)
+        self._add("movrx", side, delay, put=False, index=index)
+
+    def irq(self, flag, mode=SET, rel=False, other=None, side=None, delay=0):
+        """irq set | wait | clear FLAG. `rel` adds the state machine number to the low two bits; `other` is 'prev' or 'next' (RP2350 / RP2354)."""
+        if mode not in (SET, WAIT, CLEAR):
+            raise PioError("irq mode must be SET, WAIT or CLEAR")
+        self._irq_target(flag, rel, other)
+        self._add("irq", side, delay, flag=flag, mode=mode, rel=rel, other=other)
+
+    def set(self, dst, value, side=None, delay=0):
+        _pick(_SET_DST, dst, "set destination")
+        self._add("set", side, delay, dst=dst, value=_int(value, 0, 31, "set value"))
+
+    def word(self, value):
+        """A raw 16-bit instruction word (pioasm .word)."""
+        if self.side_count and not self.side_opt:
+            raise PioError(".word cannot be assembled by pioasm in a program with a mandatory side-set (it asks for a side value and then rejects it); use side_opt")
+        self._add("word", None, 0, value=_int(value, 0, 0xFFFF, "word"))
+
+    # ---- helpers
+    def _rx_index(self, index, put):
+        if self.version < 1:
+            raise PioError("mov to / from the RX FIFO registers needs PIO version 1 (RP2350 / RP2354)")
+        ok = ("txput", "putget") if put else ("txget", "putget")
+        if self.fifo_config not in ok:
+            raise PioError("mov %s needs fifo %s or %s, this program has fifo %s (pioasm rule)" % ("rxfifo[], isr" if put else "osr, rxfifo[]", ok[0], ok[1], self.fifo_config or "txrx"))
+        if index is not Y:
+            _int(index, 0, 3, "rxfifo index")
+
+    def _irq_target(self, flag, rel, other):
+        _int(flag, 0, 7, "IRQ flag")
+        if other is not None:
+            if self.version < 1:
+                raise PioError("irq prev / next needs PIO version 1 (RP2350 / RP2354)")
+            if other not in ("prev", "next"):
+                raise PioError("other must be 'prev' or 'next'")
+            if rel:
+                raise PioError("rel is not supported with prev / next")
+
+    # ---- output
+    def _resolve(self):
+        if self._pending_labels:
+            raise PioError("label %s points past the last instruction" % self._pending_labels[0])
+        if self._pending_wrap_target:
+            raise PioError("wrap_target points past the last instruction")
+        if not self._instrs:
+            raise PioError("program %s has no instructions" % self.name)
+        if self.in_cfg and " auto" in self.in_cfg and self.fifo_config in ("txput", "txget", "putget"):
+            raise PioError("autopush (.in ... auto) is incompatible with fifo %s (pioasm rule)" % self.fifo_config)
+        addr = {}
+        base = self.origin or 0
+        for i, ins in enumerate(self._instrs):
+            for n in ins.labels:
+                addr[n] = i      # program-relative, as pioasm writes it; the SDK adds the load offset
+        for ins in self._instrs:
+            if ins.kind == "jmp" and isinstance(ins.f["target"], str):
+                if ins.f["target"] not in addr:
+                    raise PioError("jmp to undefined label %r" % ins.f["target"])
+            elif ins.kind == "jmp" and ins.f["target"] >= len(self._instrs):
+                raise PioError("jmp target address %d is beyond the end of the program (%d instructions; pioasm rule)" % (ins.f["target"], len(self._instrs)))
+        ranges = 0
+        for ins in self._instrs:
+            if ins.kind == "wait" and ins.f["src"] == "gpio":
+                ranges |= 1 << (ins.f["idx"] >> 4)
+        if ranges & 1 and ranges & 4:
+            raise PioError("wait gpio uses GPIOs below 16 and above 31 in one program: a PIO sees 32 GPIOs at a time (GPIO base 0 or 16) (pioasm rule)")
+        if base + len(self._instrs) > MEMORY_WORDS:
+            raise PioError("origin %d plus %d instructions does not fit the %d-word memory" % (base, len(self._instrs), MEMORY_WORDS))
+        return addr
+
+    def _operand_text(self, ins):
+        f = ins.f
+        k = ins.kind
+        if k == "nop":
+            return "nop"
+        if k == "jmp":
+            c = _COND[f["cond"]][0]
+            return "jmp %s%s" % (c + " " if c else "", f["target"])
+        if k == "wait":
+            if f["src"] == "irq":
+                return "wait %d irq %s%d%s" % (f["pol"], f["mode"] + " " if f["mode"] else "", f["idx"], " rel" if f["rel"] else "")
+            if f["src"] == "jmppin":
+                return "wait %d jmppin%s" % (f["pol"], " + %d" % f["idx"] if f["idx"] else "")
+            return "wait %d %s %d" % (f["pol"], f["src"], f["idx"])
+        if k == "in":
+            return "in %r, %d" % (f["src"], f["bits"])
+        if k == "out":
+            return "out %r, %d" % (f["dst"], f["bits"])
+        if k == "push":
+            return "push%s %s" % (" iffull" if f["iff"] else "", "block" if f["blk"] else "noblock")
+        if k == "pull":
+            return "pull%s %s" % (" ifempty" if f["ife"] else "", "block" if f["blk"] else "noblock")
+        if k == "mov":
+            return "mov %r, %s%r" % (f["dst"], _MOV_OP[f["op"]][0], f["src"])
+        if k == "movrx":
+            idx = "y" if f["index"] is Y else str(f["index"])
+            return "mov rxfifo[%s], isr" % idx if f["put"] else "mov osr, rxfifo[%s]" % idx
+        if k == "irq":
+            return "irq %s%s %d%s" % (f["other"] + " " if f["other"] else "", f["mode"], f["flag"], " rel" if f["rel"] else "")
+        if k == "set":
+            return "set %r, %d" % (f["dst"], f["value"])
+        return ".word 0x%04X" % f["value"]
+
+    def pio_text(self):
+        """The program as pioasm source."""
+        self._resolve()
+        out = [".program " + self.name]
+        if self.emit_version:
+            out.append(".pio_version %d" % self.version)
+        for sym, val, public in self.defines:
+            out.append(".define %s%s %d" % ("PUBLIC " if public else "", sym, val))
+        if self.origin is not None:
+            out.append(".origin %d" % self.origin)
+        if self.clock_div is not None:
+            out.append(".clock_div %s" % self.clock_div)
+        if self.fifo_config:
+            out.append(".fifo " + self.fifo_config)
+        if self.status_cfg:
+            out.append(self.status_cfg)
+        for cfg in (self.in_cfg, self.out_cfg):
+            if cfg:
+                out.append(cfg)
+        if self.set_count is not None:
+            out.append(".set %d" % self.set_count)
+        if self.side_count:
+            out.append(".side_set %d%s%s" % (self.side_count, " opt" if self.side_opt else "", " pindirs" if self.side_pindirs else ""))
+        for ins in self._instrs:
+            if ins.wrap_target:
+                out.append(".wrap_target")
+            for n in ins.labels:
+                out.append(n + ":")
+            line = "    " + self._operand_text(ins)
+            if ins.kind != "word":
+                if ins.side is not None:
+                    line += " side %d" % ins.side
+                if ins.delay:
+                    line += " [%d]" % ins.delay
+            out.append(line)
+            if ins.wrap_top:
+                out.append(".wrap")
+        return "\n".join(out) + "\n"
+
+    # ---- own encoder (datasheet tables), independent of pioasm
+    def _ds(self, ins):
+        """The 5-bit delay / side-set field."""
+        bits = self.side_count
+        delay_bits = 5 - bits - (1 if self.side_opt else 0)
+        v = ins.delay
+        if self.side_count:
+            if ins.side is not None:
+                v |= ins.side << delay_bits
+                if self.side_opt:
+                    v |= 1 << 4
+        return v
+
+    def words(self):
+        """The assembled 16-bit words as pioasm writes them: JMP targets are relative to the start of the program (the SDK adds the load offset)."""
+        addr = self._resolve()
+        out = []
+        for ins in self._instrs:
+            f, k = ins.f, ins.kind
+            if k == "word":
+                out.append(f["value"])
+                continue
+            ds = self._ds(ins) << 8
+            if k == "nop":
+                w = (5 << 13) | ds | (_MOV_DST[Y] << 5) | _MOV_SRC[Y]
+            elif k == "jmp":
+                t = f["target"] if isinstance(f["target"], int) else addr[f["target"]]
+                w = (0 << 13) | ds | (_COND[f["cond"]][1] << 5) | t
+            elif k == "wait":
+                src = {"gpio": 0, "pin": 1, "irq": 2, "jmppin": 3}[f["src"]]
+                idx = f["idx"]
+                big = 0x10000 if f["src"] == "gpio" and idx >= 32 else 0     # pioasm flags a `wait gpio` on GPIO 32-47 with bit 16 of the word
+                if f["src"] == "gpio":
+                    idx &= 31
+                if f["src"] == "irq":
+                    idx |= {None: 0, "prev": 0x08, "next": 0x18}[f["mode"]] | (0x10 if f["rel"] else 0)
+                w = big | (1 << 13) | ds | (f["pol"] << 7) | (src << 5) | idx
+            elif k == "in":
+                w = (2 << 13) | ds | (_IN_SRC[f["src"]] << 5) | (f["bits"] & 31)
+            elif k == "out":
+                w = (3 << 13) | ds | (_OUT_DST[f["dst"]] << 5) | (f["bits"] & 31)
+            elif k == "push":
+                w = (4 << 13) | ds | (int(f["iff"]) << 6) | (int(f["blk"]) << 5)
+            elif k == "pull":
+                w = (4 << 13) | ds | 0x80 | (int(f["ife"]) << 6) | (int(f["blk"]) << 5)
+            elif k == "mov":
+                w = (5 << 13) | ds | (_MOV_DST[f["dst"]] << 5) | (_MOV_OP[f["op"]][1] << 3) | _MOV_SRC[f["src"]]
+            elif k == "movrx":
+                immediate = f["index"] is not Y
+                w = (4 << 13) | ds | (0 if f["put"] else 0x80) | 0x10 | (8 if immediate else 0) | (f["index"] & 3 if immediate else 0)
+            elif k == "irq":
+                idx = f["flag"] | {None: 0, "prev": 0x08, "next": 0x18}[f["other"]] | (0x10 if f["rel"] else 0)
+                w = (6 << 13) | ds | ((1 if f["mode"] is CLEAR else 0) << 6) | ((1 if f["mode"] is WAIT else 0) << 5) | idx
+            else:
+                w = (7 << 13) | ds | (_SET_DST[f["dst"]] << 5) | f["value"]
+            out.append(w)
+        return out
+
+    @property
+    def wrap_range(self):
+        """(wrap_target, wrap_top) as instruction indexes, with the defaults."""
+        self._resolve()
+        t = next((i for i, x in enumerate(self._instrs) if x.wrap_target), 0)
+        w = next((i for i, x in enumerate(self._instrs) if x.wrap_top), len(self._instrs) - 1)
+        return t, w
+
+
+def write_pio(programs, path):
+    """Write one or more programs into a .pio file (a global `.pio_version` is not written; each program carries its own)."""
+    with open(path, "w") as fh:
+        fh.write("\n".join(p.pio_text() for p in programs))

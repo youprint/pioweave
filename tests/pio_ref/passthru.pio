@@ -1,0 +1,6 @@
+; Autopull feeds OSR from the TX FIFO, autopush sends ISR to the RX FIFO: every word comes straight back.
+.program passthru
+.wrap_target
+    out x, 32
+    in x, 32
+.wrap

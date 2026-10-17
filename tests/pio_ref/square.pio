@@ -1,0 +1,6 @@
+; Square wave on one pin: 2 cycles high, 2 cycles low (period 4 cycles).
+.program square
+.wrap_target
+    set pins, 1 [1]
+    set pins, 0 [1]
+.wrap
