@@ -625,7 +625,7 @@ class DataPathRefusalTests(RefusalCase):
             fsm_states(m, [("A", lambda: setattr(m, "next", "A"))])
         self.refuse(body, "submodules are not supported")
 
-    # ----------------------------------------------------------------------------- the version gate and the FSM state names (python/pioweave/src/pioweave/_compat.py)
+    # ----------------------------------------------------------------------------- the version gate and the FSM state names (pioweave/_compat.py)
     def test_version_gate(self):
         from pioweave._compat import UnsupportedAmaranth, check_version
         for ok in ("0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):

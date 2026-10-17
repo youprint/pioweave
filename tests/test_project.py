@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Tests of pio_project.py: the three project kinds written by platform.build(..., project=KIND).
+"""Tests of pioweave/project.py: the three project kinds written by platform.build(..., project=KIND).
 
 The generated bitweave.toml is run with the real bitweave and pioasm when they are found (skipped otherwise). The generated Pico SDK C project is
 built through `bitweave firmware` only when PIO_BUILD_FIRMWARE=1 and the Pico SDK and arm-none-eabi-gcc are found (about 35 s). Nothing runs on a chip.

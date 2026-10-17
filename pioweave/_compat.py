@@ -6,7 +6,7 @@ What the compiler needs from Amaranth, and where it comes from:
   Assign, Switch, Operator, Concat, Slice  the private module `amaranth.hdl._ast` (not exported by `amaranth.hdl`; Slice is read for `wait pin`: `.value`, `.start`, `.stop`)
   the names of the states of an FSM `fsm_state_names()` below: `Signal.decoder` (0.5.x) or the signal's format object (0.6 development versions)
 
-Versions (python/scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
+Versions (scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
 no pre-release and the newest tag is v0.6.0.dev0); the quick suite (refusals, builder, boards, the instruction words of every example) passes on every 0.5.x from 0.5.1 to 0.5.10 (0.5.0 is not supported: it has no ``io.SimulationPort``, which the reference simulation needs). Those
 are accepted; any other version is refused with a clear message unless PIOWEAVE_ALLOW_UNTESTED=1 is set.
 """

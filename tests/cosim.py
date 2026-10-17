@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Co-simulation helpers for tests/test_pio_compile.py run an Amaranth design in the Amaranth simulator and its compiled PIO program in
+"""Co-simulation helpers for tests/test_compile.py: run an Amaranth design in the Amaranth simulator and its compiled PIO program in
 the bitweave PIO simulator, and return the pin waveforms of both as strings (one character per clock cycle).
 
 Alignment: the Amaranth FSM state at clock cycle t does what the PIO instruction executed in cycle t does. Amaranth outputs are registers, so the value

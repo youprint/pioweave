@@ -3,7 +3,7 @@
 
 A PIO state machine is an FSM whose state is the program counter and that executes one instruction per clock cycle. A design written as one
 Amaranth FSM in which every state does what one PIO instruction does is therefore cycle-equivalent to the compiled program, and the Amaranth
-simulation of the design is the reference (tests/test_pio_compile.py compares it with the bitweave PIO simulator, pin by pin and cycle by
+simulation of the design is the reference (tests/test_compile.py compares it with the bitweave PIO simulator, pin by pin and cycle by
 cycle). The compiler reads the Amaranth 0.5.10 IR (Fragment.statements); anything it cannot map without changing the cycle behaviour is refused
 with the source line, never approximated.
 

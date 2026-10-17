@@ -6,7 +6,7 @@ constants, errors raised when the program is built, not when the chip runs it. I
 
   program.pio_text()   pioasm source (assembled by pioasm, which bitweave runs: `bitweave pio NAME` with a `generator`)
   program.words()      the 16-bit instruction words, encoded here from the datasheet tables (RP2040 datasheet chapter 3, RP2350
-                       datasheet chapter 11), independently of pioasm, so the two can be compared (tests/test_pioprog.py)
+                       datasheet chapter 11), independently of pioasm, so the two can be compared (tests/test_program.py)
 
 Facts used: the instruction encodings, the directive and instruction syntax of pioasm as printed in the datasheets. No third-party code.
 Host software only: nothing here runs on a chip or in an FPGA.

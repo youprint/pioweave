@@ -804,7 +804,7 @@ class Shifter:
         m.d.sync += irqm.set_tog[flag].eq(~irqm.set_tog[flag])
 
     def _irq_clear(self, m, flag, rel=False):
-        """`irq clear flag`: lower IRQ flag `flag` (0 to 7) and go on. See `irq_set` for `rel`.
+        """`irq clear flag`: lower IRQ flag `flag` (0 to 7) and go on. See `Shifter._irq_set` for `rel`.
 
         Parameters
         ----------
@@ -822,7 +822,7 @@ class Shifter:
 
     def _irq_wait(self, m, flag, rel=False):
         """`irq wait flag`: raise the flag, then stall until it has been cleared (by the host, or by another state machine). Write
-        ``with sh.irq_wait(m, 3): m.next = ...``; the body runs in the cycle the instruction completes.
+        ``with sh.irq(m, 3, "wait"): m.next = ...``; the body runs in the cycle the instruction completes.
 
         Parameters
         ----------

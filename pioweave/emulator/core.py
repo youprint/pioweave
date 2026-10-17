@@ -134,8 +134,6 @@ class Config:
         version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
     clkdiv : float
         The clock divider, 1.0 to 65536 in steps of 1/256 (1.0 at reset; the register field INT = 0 means 65536, RP2040 Table 381 p.376).
-    sync_bypass : bool
-        Unused; the synchronisers are bypassed per GPIO with `PioBlock.sync_bypass` (INPUT_SYNC_BYPASS).
     out_sticky : bool
         EXECCTRL_OUT_STICKY: the most recent OUT / SET pin write is asserted again on every cycle (RP2040 Table 382 p.376; the exact behaviour is [verify]).
     inline_out_en : bool
@@ -145,7 +143,7 @@ class Config:
         EXECCTRL_OUT_EN_SEL: the data bit used as the inline OUT enable.
     """
     __slots__ = ("in_base", "in_count", "out_base", "out_count", "set_base", "set_count", "side_base", "jmp_pin", "in_right", "out_right", "autopush", "autopull", "push_thresh",
-                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass", "out_sticky", "inline_out_en", "out_en_sel")
+                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "out_sticky", "inline_out_en", "out_en_sel")
 
     def __init__(self):
         self.in_base = self.out_base = self.set_base = self.side_base = self.jmp_pin = 0
@@ -160,7 +158,6 @@ class Config:
         self.status_sel, self.status_n = "tx", 0
         self.fifo_join = "none"                          # none, tx, rx; version 1 also rx_put, rx_get, rx_put_get
         self.clkdiv = 1.0
-        self.sync_bypass = False
         self.out_sticky = self.inline_out_en = False
         self.out_en_sel = 0
 

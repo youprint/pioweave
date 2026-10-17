@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Tests of platform_rp.py, pio_compile.py and pio_designs.py.
+"""Tests of pioweave/platform.py, pioweave/compile.py and pioweave/designs.py.
 
 The main test compares the Amaranth simulation of a design with the bitweave PIO simulator running the compiled program, pin by pin and cycle by
 cycle, on the example designs and on random designs of the accepted subset. It is skipped (not passed) when the bitweave binary or pioasm is
@@ -438,8 +438,8 @@ class DataPathTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- the same programs on every Amaranth version
     def test_example_programs_are_the_same_on_every_amaranth_version(self):
-        """python/pioweave/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
-        The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently.
+        """tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
+        The matrix (scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently.
 
         The file is checked in. After adding or changing an example design, regenerate it with Amaranth 0.5.10 (from the repository root, with ``PYTHONPATH=.``)::
 
