@@ -16,7 +16,7 @@ import json
 import os
 import sys
 
-from . import designs
+from . import block_cli, designs
 from .project import SimOptions
 from .platform import PLATFORMS
 
@@ -150,13 +150,15 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "new":
         return _new(a)
+    if a.cmd in ("emulate", "build") and block_cli.is_block(a.design):        # an example block (several state machines): pioweave/block_cli.py
+        return getattr(block_cli, a.cmd)(a)
     if a.cmd == "emulate":
         return _emulate(a)
     if a.cmd == "doctor":
         from .doctor import main as doctor
         return doctor(strict=a.strict)
     if a.cmd == "list":
-        print("\n".join("%s (%s)" % (k, v[1]) for k, v in sorted(designs.PROGRAMS.items())))
+        print("\n".join(["%s (%s)" % (k, v[1]) for k, v in sorted(designs.PROGRAMS.items())] + block_cli.list_blocks()))
         return 0
     cls, chip, stim, cycles, name, opts = _resolve(a)
     factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=a.clock_hz))  # noqa: E731

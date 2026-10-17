@@ -717,7 +717,8 @@ class Shifter:
     # ---- IRQ flags
     def _irq(self, m):
         if self.irq_model is None:
-            self.irq_model = IrqModel(getattr(self.platform, "irq_init", 0))
+            hub = getattr(self.platform, "irq_hub", None)        # a state machine of a block (pioweave.block) shares the flags with the others
+            self.irq_model = hub.port(self.platform.sm_index) if hub is not None else IrqModel(getattr(self.platform, "irq_init", 0))
             m.submodules.pio_irq = self.irq_model
         return self.irq_model
 

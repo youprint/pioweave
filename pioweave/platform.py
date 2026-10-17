@@ -105,6 +105,8 @@ class _RPPioPlatform(Platform):
     default_clk = None
     default_rst = None
     sdk_board = None          # Pico SDK board name (PICO_BOARD) of a board definition; None for a bare chip
+    irq_hub = None            # set by pioweave.block.Block: the IRQ flags shared by the state machines of a block; None for a design with one state machine
+    sm_index = 0              # the state machine number (0 to 3); set by pioweave.block.Block
 
     def __init__(self, sm_clock_hz=None):
         super().__init__()
@@ -303,6 +305,24 @@ class _RPPioPlatform(Platform):
         """
         from .data import Shifter
         return Shifter(self, m, out_shift, in_shift, self.tx_init, **config)
+
+    def block(self, *machines, name=None):
+        """A block design with several state machines on this chip (`pioweave.block.Block`): ``platform.block(Machine("a", A), Machine("b", B)).build(...)``.
+
+        Parameters
+        ----------
+        *machines : pioweave.block.Machine
+            The state machines, in state machine number order (the first is state machine 0).
+        name : str or None
+            The default project name of the block.
+
+        Returns
+        -------
+        pioweave.block.Block
+            The block, for this platform class and this platform's `sm_clock_hz`.
+        """
+        from .block import Block
+        return Block(machines, type(self), sm_clock_hz=self.sm_clock_hz, name=name)
 
     def create_missing_domain(self, name):
         return ClockDomain(name, reset_less=True)

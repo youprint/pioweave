@@ -207,9 +207,12 @@ def amaranth_waves(factory, cycles, stim=None):
 
 
 # ----------------------------------------------------------------------------- files
-def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None, irq_set=(), irq_clear=(), golden_irq=None):
-    lines = ["[pio.%s]" % name, 'source = "{root}/%s.pio"' % name, 'chip = "%s"' % chip, "",
-             "[[pio.%s.sim]]" % name, 'name = "amaranth_reference"', "cycles = %d" % cycles]
+def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), drain=True, golden_rx=None, irq_set=(), irq_clear=(), golden_irq=None, case="amaranth_reference",
+               program=None, header=True):
+    """The text of a ``[pio.NAME]`` section with one simulation case; `case` names it, `program` selects one program of a file with several (`pioweave.block`), and
+    ``header=False`` leaves out the ``[pio.NAME]`` lines when the section was written already."""
+    lines = (["[pio.%s]" % name, 'source = "{root}/%s.pio"' % name, 'chip = "%s"' % chip, ""] if header else [""]) + [
+        "[[pio.%s.sim]]" % name, 'name = "%s"' % case] + (['program = "%s"' % program] if program else []) + ["cycles = %d" % cycles]
     for k, v in compiled.sim_config().items():
         lines.append('%s = "%s"' % (k, v) if isinstance(v, str) else "%s = %s" % (k, "true" if v is True else "false" if v is False else "%d" % v))
     if tx:
@@ -238,22 +241,10 @@ def _toml_case(compiled, name, cycles, stim, golden, chip, tx=(), tx_feed=(), dr
     return "\n".join(lines) + "\n"
 
 
-def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
-    base = compiled.gpio_base
-    lines = ['#include <stdio.h>', '#include "pico/stdlib.h"', '#include "hardware/clocks.h"', '#include "hardware/pio.h"', '#include "%s.pio.h"' % name, "",
-             "// Generated from the Amaranth design by python/pio_project.py. Not run on a chip [verify].", ""]
-    if platform.sm_clock_hz:
-        lines += ["#define SM_CLOCK_HZ %.1ff" % float(platform.sm_clock_hz), ""]
-    lines += ["int main(void) {", "    PIO pio = pio0;"]
-    if base:
-        lines.append("    pio_set_gpio_base(pio, %d);     // this program uses GPIO %d to %d; the SDK pin numbers below are real GPIO numbers" % (base, base, base + 31))
-    if compiled.irq_rel:
-        lines += ["    uint sm = 0;                      // the program uses `irq ... rel`: the flag number depends on the state machine number, the simulation case is state machine 0",
-                  "    pio_sm_claim(pio, sm);"]
-    else:
-        lines += ["    uint sm = pio_claim_unused_sm(pio, true);"]
-    lines += ["    uint offset = pio_add_program(pio, &%s_program);" % name,
-              "    pio_sm_config c = %s_program_get_default_config(offset);" % name]
+def _c_sm_config(compiled, platform, name):
+    """The lines of main.c that configure one state machine, from ``pio_sm_config c = ...`` to ``pio_sm_init``. They use the C variables ``pio``, ``sm`` and ``offset``,
+    which the caller declares (`_c_main` for one state machine; `pioweave.block` declares them in a scope of its own for each machine of a block)."""
+    lines = ["    pio_sm_config c = %s_program_get_default_config(offset);" % name]
     if compiled.set_pin:
         b, n = compiled.set_pin.gpios[0], len(compiled.set_pin.gpios)
         lines += ["    sm_config_set_set_pins(&c, %d, %d);" % (b, n), "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n),
@@ -285,9 +276,28 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=(
         lines.append("    sm_config_set_jmp_pin(&c, %d);" % compiled.jmp_gpio)
     if platform.sm_clock_hz:
         lines.append("    sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / SM_CLOCK_HZ);")
+    lines += ["    pio_sm_init(pio, sm, offset, &c);"]
+    return lines
+
+
+def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
+    base = compiled.gpio_base
+    lines = ['#include <stdio.h>', '#include "pico/stdlib.h"', '#include "hardware/clocks.h"', '#include "hardware/pio.h"', '#include "%s.pio.h"' % name, "",
+             "// Generated from the Amaranth design by python/pio_project.py. Not run on a chip [verify].", ""]
+    if platform.sm_clock_hz:
+        lines += ["#define SM_CLOCK_HZ %.1ff" % float(platform.sm_clock_hz), ""]
+    lines += ["int main(void) {", "    PIO pio = pio0;"]
+    if base:
+        lines.append("    pio_set_gpio_base(pio, %d);     // this program uses GPIO %d to %d; the SDK pin numbers below are real GPIO numbers" % (base, base, base + 31))
+    if compiled.irq_rel:
+        lines += ["    uint sm = 0;                      // the program uses `irq ... rel`: the flag number depends on the state machine number, the simulation case is state machine 0",
+                  "    pio_sm_claim(pio, sm);"]
+    else:
+        lines += ["    uint sm = pio_claim_unused_sm(pio, true);"]
+    lines += ["    uint offset = pio_add_program(pio, &%s_program);" % name]
+    lines += _c_sm_config(compiled, platform, name)
     if compiled.uses_rx:
         lines.insert(lines.index("int main(void) {") + 1, "    stdio_init_all();")
-    lines += ["    pio_sm_init(pio, sm, offset, &c);"]
     lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);" % w for w in tx[:compiled.tx_depth]]       # the TX FIFO holds four words (eight when joined for TX, none when joined for RX); more would block before the machine runs
     lines += ["    pio_sm_set_enabled(pio, sm, true);"]
     lines += ["    pio_sm_put_blocking(pio, sm, 0x%08xu);       // written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed if compiled.tx_depth]
