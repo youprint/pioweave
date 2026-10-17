@@ -228,6 +228,8 @@ class UartTx(PioDesign):
                 m.next = "START"
             with m.State("START"):
                 m.d.sync += [tx.o.eq(0), x.eq(7)]     # start bit (side-set) and the bit counter
+                m.next = "START_HOLD"
+            with m.State("START_HOLD"):               # no effect: the delay of START, so the start bit lasts 2 cycles like every other bit
                 m.next = "BIT"
             with m.State("BIT"):
                 sh.out(m, tx)                         # out pins, 1

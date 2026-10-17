@@ -199,7 +199,7 @@ The examples with a data path in ``pioweave/designs.py`` (``python -m pioweave l
    * - Name
      - What it shows
    * - ``uart_tx``
-     - the Pico SDK transmitter: ``pull block side 1 [1]``, ``set x, 7 side 0``, ``out pins, 1``, ``jmp x--``. Two cycles per bit.
+     - the Pico SDK transmitter with 2 delay cycles instead of 8: ``pull block side 1 [1]``, ``set x, 7 side 0 [1]``, ``out pins, 1``, ``jmp x--``. Two cycles per bit, the start and stop bits included.
    * - ``uart_rx``
      - the receiver: ``wait 0 gpio 4``, ``set x, 7 [10]``, ``in pins, 1 [6]``, ``jmp x--``, ``push block``. Eight cycles per bit; the byte arrives in bits 31..24 of the word.
    * - ``byte_swap``

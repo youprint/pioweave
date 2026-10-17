@@ -366,9 +366,26 @@ class DataPathTests(support.TestCase):
         c, a, b = run_both("uart_tx")
         self.assertEqual(a["waves"], b["waves"])
         wave = a["waves"][0]
-        # idle high, then the start bit (low for the one cycle of `set x, 7 side 0`), then 0x55 least significant bit first at two cycles per bit (out + jmp)
-        frame = wave[wave.index("0"):][:17]
-        self.assertTrue(frame == "0" + "".join(c * 2 for c in "10101010") and a["tx_left"] == 0)
+        # COR-04: 8N1 at two cycles per bit: idle high, a start bit of TWO cycles, then 0x55 least significant bit first at two cycles per bit (out + jmp)
+        frame = wave[wave.index("0"):][:18]
+        self.assertTrue(frame == "00" + "".join(c * 2 for c in "10101010") and a["tx_left"] == 0, frame)
+
+    @needs_tools
+    def test_uart_tx_frames_decode_as_8n1_at_two_cycles_per_bit(self):
+        # an independent check against the 8N1 definition (start bit low, 8 data bits least significant first, stop bit high), not against the program text
+        c, a, b = run_both("uart_tx")
+        wave, bytes_, i = a["waves"][0], [], 0
+        while "0" in wave[i:]:
+            i += wave[i:].index("0")                            # the falling edge of a start bit
+            if i + 20 > len(wave):
+                break
+            self.assertTrue(wave[i:i + 2] == "00", "start bit lasts two cycles: " + wave[i:i + 6])
+            bits = [int(wave[i + 2 + 2 * k]) for k in range(8)]       # sampled at the first cycle of each bit
+            self.assertEqual([wave[i + 2 + 2 * k + 1] for k in range(8)], [wave[i + 2 + 2 * k] for k in range(8)], "each bit lasts two cycles")
+            self.assertEqual(wave[i + 18:i + 20], "11", "stop bit high for two cycles")
+            bytes_.append(sum(bit << k for k, bit in enumerate(bits)))
+            i += 20
+        self.assertEqual(bytes_, [0x55, 0xC3])
 
     @needs_tools
     def test_uart_rx_receives_the_bytes(self):

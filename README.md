@@ -33,6 +33,8 @@ class UartTx(PioDesign):                       # 8N1 transmitter, two clock cycl
                 m.next = "START"
             with m.State("START"):
                 m.d.sync += [tx.o.eq(0), x.eq(7)]
+                m.next = "START_HOLD"
+            with m.State("START_HOLD"):       # no effect: becomes the delay of START, so the start bit lasts 2 cycles
                 m.next = "BIT"
             with m.State("BIT"):
                 sh.out(m, tx)                  # out pins, 1
@@ -56,7 +58,7 @@ This compiles to
 .program uart_tx
 .side_set 1 opt
     pull block side 1 [1]
-    set x, 7 side 0
+    set x, 7 side 0 [1]
 s_BIT:
     out pins, 1
     jmp x-- s_BIT
