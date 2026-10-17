@@ -43,7 +43,7 @@ def report():
         ok = check_version(amaranth.__version__, allow=False)
         rows.append(("ok" if ok else "fail", "amaranth", "%s %s (tested: %s and %s)" % (amaranth.__version__, "accepted" if ok else "NOT tested with this pioweave", TESTED, ", ".join(TESTED_DEV))))
     except ImportError:
-        rows.append(("fail", "amaranth", "not installed (pip install 'amaranth>=0.5,<0.6')"))
+        rows.append(("fail", "amaranth", "not installed (pip install 'amaranth>=0.5.1,<0.6')"))
     try:
         rows.append(("ok", "pioweave", importlib.metadata.version("pioweave")))
     except importlib.metadata.PackageNotFoundError:

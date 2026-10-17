@@ -611,9 +611,9 @@ class DataPathRefusalTests(RefusalCase):
     # ----------------------------------------------------------------------------- the version gate and the FSM state names (python/pioweave/src/pioweave/_compat.py)
     def test_version_gate(self):
         from pioweave._compat import UnsupportedAmaranth, check_version
-        for ok in ("0.5.0", "0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):
+        for ok in ("0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):
             self.assertTrue(check_version(ok, allow=False))
-        for bad in ("0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
+        for bad in ("0.5.0", "0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
             with self.assertRaisesRegex(UnsupportedAmaranth, "tested with Amaranth"):
                 check_version(bad, allow=False)
             self.assertIs(check_version(bad, allow=True), False)     # PIOWEAVE_ALLOW_UNTESTED=1 lets it through (reported as untested)

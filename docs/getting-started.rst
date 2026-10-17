@@ -44,7 +44,7 @@ Install
 
 From a checkout (development): ``git clone https://github.com/youprint/pioweave && cd pioweave && pip install -e '.[test]'``.
 
-``pip`` pulls in ``amaranth>=0.5,<0.6``. To use the 0.6 development version (see :doc:`compatibility <compatibility>`), install Amaranth from its repository first and then pioweave with ``--no-deps``.
+``pip`` pulls in ``amaranth>=0.5.1,<0.6``. To use the 0.6 development version (see :doc:`compatibility <compatibility>`), install Amaranth from its repository first and then pioweave with ``--no-deps``.
 
 With bitweave in a project directory: ``bitweave install pioweave --yes`` creates ``.bitweave-tools`` and installs Amaranth and pioweave into it. The component takes pioweave from a checkout; point bitweave at it with ``PIOWEAVE_DIR=/path/to/pioweave`` (or keep the checkout beside the bitweave checkout). Then use ``{root}/.bitweave-tools/bin/python -m pioweave build ...`` as a generator.
 

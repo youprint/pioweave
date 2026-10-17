@@ -82,7 +82,7 @@ pioweave is a normal Python package for an environment that has Amaranth:
     pip install git+https://github.com/youprint/pioweave.git     # now, from the repository (private: needs access)
     pip install -e .                                              # from a checkout, for development
 
-`pip` pulls in `amaranth>=0.5,<0.6`. Then `python -m pioweave --version` prints the installed version, `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list`
+`pip` pulls in `amaranth>=0.5.1,<0.6`. Then `python -m pioweave --version` prints the installed version, `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list`
 shows the example designs. `python -m pioweave new --list` shows the project templates and `python -m pioweave new my-blink` creates a project with a design, a unit test that runs it in the emulator and a `bitweave.toml`.
 With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.rst](docs/getting-started.rst)).
 

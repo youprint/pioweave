@@ -27,7 +27,7 @@ Run these in this order, in a clean checkout of the commit to be tagged. The too
    It takes about 11 minutes with the tools. ``PIO_BUILD_FIRMWARE=1`` additionally builds the generated Pico SDK projects (needs the SDK and ``arm-none-eabi-gcc``).
 2. The Amaranth version matrix (needs network; see :doc:`compatibility <compatibility>`)::
 
-      scripts/matrix.sh 0.5.0 0.5.1 0.5.10 git:90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7
+      scripts/matrix.sh 0.5.1 0.5.10 git:90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7
       MATRIX_QUICK=1 scripts/matrix.sh 0.5.2 0.5.3 0.5.4 0.5.5 0.5.6 0.5.7 0.5.8 0.5.9
 
    Every line must end with ``OK``. The script installs each Amaranth version into a fresh virtual environment, installs pioweave with ``--no-deps`` (so that pip does not refuse a version outside the declared range) and prints what the version gate says when it refuses. The commit in ``TESTED_DEV`` in ``pioweave/_compat.py`` is the development version the suite was last run on.
