@@ -43,7 +43,7 @@ Supported versions
 
 There is **no 0.6 beta release**: PyPI has no pre-release and the newest upstream tag is ``v0.6.0.dev0``. The 0.6 development version is a moving target; a later commit may break the compiler, and one run of ``scripts/matrix.sh`` on that commit shows it.
 
-The programs a design compiles to are identical on all of these versions: ``tests/example_programs.json`` holds the instruction words and the simulator configuration of the fifteen example designs, and a test compares them.
+The programs a design compiles to are identical on all of these versions: ``tests/example_programs.json`` holds the instruction words and the simulator configuration of the seventeen example designs, and a test compares them.
 
 The version gate
 ----------------

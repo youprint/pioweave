@@ -42,6 +42,7 @@ class ExampleTests(support.TestCase):
         self.assertEqual(a["waves"], b["waves"])
         self.assertTrue(a["rx"] == b["rx"] and a["tx_left"] == b["tx_left"] and a["rx_left"] == b["rx_left"])
         self.assertTrue(not a["irq"] or a["irq"] == b["irq"])
+        self.assertEqual(a["dirs"], b["dirs"])
         self.assertTrue(any("1" in w for w in a["waves"].values()) or a["rx"], "the example should drive something")
 
     def test_square_wave_compiles_to_two_instructions(self):
@@ -138,12 +139,14 @@ class RandomDesignTests(support.TestCase):
         factory = cosim.random_factory(spec)
         compiled = compile_factory(factory, "rnd")
         cycles = 160
-        a = cosim.amaranth_waves(factory, cycles, spec["stim"])
-        b = cosim.pio_waves(compiled, cycles, spec["stim"])
+        ar = cosim.amaranth_run(factory, cycles, spec["stim"])
+        br = cosim.pio_run(compiled, cycles, spec["stim"])
+        a, b = ar["waves"], br["waves"]
         undriven = {g: w for g, w in a.items() if g not in b}
         self.assertTrue(all(set(w) <= {"0"} for w in undriven.values()), "a pin the program never drives changed in the Amaranth simulation")
         a = {g: w for g, w in a.items() if g in b}
         self.assertEqual(a, b, "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec))
+        self.assertEqual(ar["dirs"], br["dirs"], "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec))
 
 
 # ----------------------------------------------------------------------------- forms the random generator does not reach
@@ -414,6 +417,7 @@ class DataPathTests(support.TestCase):
         self.assertEqual({g: w for g, w in a["waves"].items() if g in b["waves"]}, b["waves"], why)
         self.assertTrue(cosim.same_rx(a, b, spec["drain"]), why)
         self.assertEqual((a["tx_left"], a["rx_left"]), (b["tx_left"], b["rx_left"]), why)
+        self.assertEqual(a["dirs"], b["dirs"], why)
 
     # ----------------------------------------------------------------------------- the same programs on every Amaranth version
     def test_example_programs_are_the_same_on_every_amaranth_version(self):
@@ -467,6 +471,7 @@ def both_ways(factory, cycles=80, stim=None, tx=(), tx_feed=(), drain=True, irq_
     assert {g: w for g, w in a["waves"].items() if g in b["waves"]} == b["waves"], (a["waves"], b["waves"], compiled.program.pio_text())
     assert cosim.same_rx(a, b, drain) and (a["tx_left"], a["rx_left"]) == (b["tx_left"], b["rx_left"]), (a, b, compiled.program.pio_text())
     assert not a["irq"] or a["irq"] == b["irq"], (a["irq"], b["irq"], compiled.program.pio_text())
+    assert a["dirs"] == b["dirs"], (a["dirs"], b["dirs"], compiled.program.pio_text())
     return compiled, a, b
 
 

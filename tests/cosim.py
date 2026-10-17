@@ -60,7 +60,7 @@ def emu_run(compiled, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_set=
     for w in tx:
         sm.put(w)
     feeds = sorted(tx_feed)
-    pads, rx, irq = [], [], []
+    pads, rx, irq, dirs_seen = [], [], [], []
     for t in range(cycles):
         for c, w in feeds:
             if c == t:
@@ -81,9 +81,11 @@ def emu_run(compiled, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_set=
             while len(sm.rx):
                 rx.append((t, sm.get()))
         pads.append(block.pads())
+        dirs_seen.append(block.dirs)
         irq.append(block.irq)
     return {"waves": {g: "".join(str((p >> compiled.pin(g)) & 1) for p in pads) for g in compiled.output_gpios}, "rx": rx, "rx_left_words": list(sm.rx.q),
-            "rx_left": len(sm.rx), "tx_left": len(sm.tx), "irq": irq}
+            "rx_left": len(sm.rx), "tx_left": len(sm.tx), "irq": irq,
+            "dirs": {g: "".join(str((d >> compiled.pin(g)) & 1) for d in dirs_seen) for g in compiled.dynamic_gpios}}
 
 
 def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=True, irq_set=(), irq_clear=()):
@@ -128,9 +130,15 @@ def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=Tr
         trace = sim["trace"]
         return {"waves": {g: "".join(str((t["pad"] >> compiled.pin(g)) & 1) for t in trace) for g in compiled.output_gpios},
                 "rx": [(e["cycle"], e["value"]) for e in sim["rx"]], "rx_left": len(sim["rx_left"]), "rx_left_words": list(sim["rx_left"]), "tx_left": sim["tx_left"],
-                "irq": [t["irq"] for t in trace]}
+                "irq": [t["irq"] for t in trace],
+                "dirs": {g: "".join(str((t["dirs"] >> compiled.pin(g)) & 1) for t in trace) for g in compiled.dynamic_gpios}}
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def same_dirs(a, b):
+    """The pin directions per cycle of two runs (`dirs`: {gpio: waveform} of the pins of groups with a direction register); the pads of those pins are in ``waves``."""
+    return a["dirs"] == b["dirs"]
 
 
 def same_rx(a, b, drain=True):
@@ -162,7 +170,8 @@ class RandomDesign(Elaboratable):
         from amaranth.hdl import Module
         s = self.spec
         m = Module()
-        setp = platform.buffer(m, "o", "setbus", 0) if s["set_w"] else None
+        setp = platform.buffer(m, "io" if "set_dirs" in s else "o", "setbus", 0) if s["set_w"] else None
+        sd = platform.directions(setp, init=s["set_dirs"]) if "set_dirs" in s else None          # pin directions: `set pindirs` states
         side = platform.buffer(m, "o", "sidebus", 0) if s["side_w"] else None
         if side is not None:
             platform.pio_role(side, "side")
@@ -178,16 +187,18 @@ class RandomDesign(Elaboratable):
                     k = st["kind"]
                     if "side" in st and side is not None:
                         m.d.sync += side.o.eq(st["side"])
-                    if k.startswith("set") and k not in ("setx", "sety") and setp is not None:
+                    if k.startswith("set") and k not in ("setx", "sety", "set_dirs") and setp is not None:
                         m.d.sync += setp.o.eq(st["value"])
                     if k == "setx":
                         m.d.sync += x.eq(st["value"])
                     if k == "sety":
                         m.d.sync += y.eq(st["value"])
+                    if k == "set_dirs":
+                        m.d.sync += sd.eq(st["value"])
                     if k == "mov":
                         src = {"x": x, "y": y}[st["src"]]
                         m.d.sync += {"x": x, "y": y}[st["dst"]].eq(~src if st["inv"] else src)
-                    if k in ("nop", "nop_side", "set", "set_side", "setx", "sety", "mov"):
+                    if k in ("nop", "nop_side", "set", "set_side", "setx", "sety", "mov", "set_dirs"):
                         m.next = fall
                     elif k in ("jmp", "jmp_side"):
                         m.next = tgt
@@ -272,7 +283,24 @@ def random_spec(seed):
             st["kind"] = "nop"
         spec["states"].append(st)
     spec["stim"] = {g: "".join(r.choice("01") for _ in range(r.randint(10, 40))) for g in spec["in_pins"]}
+    _extend_spec_dirs(spec, seed)
     return spec
+
+
+def _extend_spec_dirs(spec, seed):
+    """From a second random stream (so the designs of the earlier generator stay as they were): half of the designs with a set bus make it bidirectional, with a direction
+    register, and some states become `set pindirs`. The pad of those pins is the output where the pin is an output and the stimulus elsewhere."""
+    r = random.Random(130_000 + seed)
+    if not spec["set_w"] or r.random() < .5:
+        return
+    w = spec["set_w"]
+    spec["set_dirs"] = r.randrange(1 << w)
+    for st in spec["states"]:
+        if st["kind"] in ("nop", "nop_side", "setx", "sety", "mov") and r.random() < .5:
+            st["kind"] = "set_dirs"
+            st["value"] = r.randrange(1 << w)
+    for k in range(w):
+        spec["stim"][spec["set_base"] + k] = "".join(r.choice("01") for _ in range(r.randint(10, 40)))
 
 
 def random_factory(spec):
@@ -282,7 +310,7 @@ def random_factory(spec):
         pl = PLATFORMS[spec["chip"]]()
         res = []
         if spec["set_w"]:
-            res.append(Resource("setbus", 0, Pins(" ".join(str(spec["set_base"] + k) for k in range(spec["set_w"])), dir="o")))
+            res.append(Resource("setbus", 0, Pins(" ".join(str(spec["set_base"] + k) for k in range(spec["set_w"])), dir="io" if "set_dirs" in spec else "o")))
         if spec["side_w"]:
             res.append(Resource("sidebus", 0, Pins(" ".join(str(spec["side_base"] + k) for k in range(spec["side_w"])), dir="o")))
         pl.add_resources(res)
@@ -291,7 +319,7 @@ def random_factory(spec):
 
 
 # ----------------------------------------------------------------------------- random designs with a data path (FIFOs, OSR, ISR)
-OUT_IN_KINDS = ("out_x", "out_y", "out_null", "out_pins", "out_isr", "in_x", "in_y", "in_null", "in_pins", "in_isr", "in_osr")
+OUT_IN_KINDS = ("out_x", "out_y", "out_null", "out_pins", "out_pindirs", "out_isr", "in_x", "in_y", "in_null", "in_pins", "in_isr", "in_osr")
 DATA_KINDS = ["nop", "nop", "pull_b", "pull_b", "pull_nb", "push_b", "push_nb", "out_x", "out_y", "out_null", "out_pins", "out_pins", "in_x", "in_y", "in_null",
               "in_pins", "in_pins", "setx", "sety", "mov", "jx"]
 
@@ -306,10 +334,13 @@ class RandomDataDesign(Elaboratable):
         from amaranth.hdl import Module
         s = self.spec
         m = Module()
-        outp = platform.buffer(m, "o", "outbus", 0)
+        pd = s.get("pd")          # pin directions: the OUT group (and the side-set group) are bidirectional with a direction register
+        outp = platform.buffer(m, "io" if pd else "o", "outbus", 0)
+        od = platform.directions(outp, init=pd["out_init"]) if pd else None
         inp = platform.buffer(m, "i", "inbus", 0)
-        side = platform.buffer(m, "o", "sidebus", 0) if s["side_w"] else None
-        if side is not None:
+        side = platform.buffer(m, "io" if pd and pd["side_dirs"] else "o", "sidebus", 0) if s["side_w"] else None
+        sdir = platform.directions(side, init=pd["side_init"]) if side is not None and pd and pd["side_dirs"] else None      # the side-set writes pin directions
+        if side is not None and sdir is None:
             platform.pio_role(side, "side")
         sh = platform.shifter(m, out_shift=s["out_shift"], in_shift=s["in_shift"], **s.get("shifter", {}))
         x, y = platform.scratch("x"), platform.scratch("y")
@@ -320,7 +351,7 @@ class RandomDataDesign(Elaboratable):
                 with m.State("S%d" % i):
                     k = st["kind"]
                     if "side" in st and side is not None:
-                        m.d.sync += side.o.eq(st["side"])
+                        m.d.sync += (side.o if sdir is None else sdir).eq(st["side"])
                     if k == "pull_b":
                         with sh.pull(m):
                             m.next = fall
@@ -341,7 +372,10 @@ class RandomDataDesign(Elaboratable):
                             m.next = fall
                     elif k == "movg":
                         ends = {"x": "x", "y": "y", "osr": "osr", "isr": "isr"}
-                        sh.mov(m, outp if st["mdst"] == "pins" else ends[st["mdst"]], inp if st["msrc"] == "pins" else {"null": "null", "status": "status", **ends}[st["msrc"]], st["mop"])
+                        sh.mov(m, outp if st["mdst"] == "pins" else od if st["mdst"] == "pindirs" else ends[st["mdst"]], inp if st["msrc"] == "pins" else {"null": "null", "status": "status", **ends}[st["msrc"]], st["mop"])
+                        m.next = fall
+                    elif k == "set_dirs":
+                        m.d.sync += od.eq(st["value"])                  # set pindirs, N
                         m.next = fall
                     elif k == "wait_pin":
                         bit = inp.i[st["bit"]]
@@ -363,7 +397,7 @@ class RandomDataDesign(Elaboratable):
                             m.next = fall
                     elif k in OUT_IN_KINDS:
                         shift = sh.out if k.startswith("out") else sh.in_
-                        target = {"x": "x", "y": "y", "null": "null", "isr": "isr", "osr": "osr", "pins": outp if k.startswith("out") else inp}[k.split("_")[1]]
+                        target = {"x": "x", "y": "y", "null": "null", "isr": "isr", "osr": "osr", "pins": outp if k.startswith("out") else inp, "pindirs": od}[k.split("_")[1]]
                         auto = s.get("shifter", {}).get("autopull" if k.startswith("out") else "autopush")
                         if auto or st.get("with"):
                             with shift(m, target, st["n"]):          # the body runs when the instruction completes
@@ -418,7 +452,38 @@ def random_data_spec(seed):
         spec["states"].append(st)
     spec["stim"] = {spec["in_base"] + j: "".join(r.choice("01") for _ in range(r.randint(10, 40))) for j in range(spec["in_w"])}
     _extend_data_spec(spec, seed)
+    _extend_dir_spec(spec, seed)
     return spec
+
+
+def _extend_dir_spec(spec, seed):
+    """Pin directions (a third random stream, so the designs of the earlier generators stay as they were): in 45 percent of the designs the OUT group is bidirectional with a
+    direction register, some states become `out pindirs`, `mov pindirs` (PIO version 1) or `set pindirs`, and the side-set writes directions in a third of those. The pad of the
+    pins is the output where the pin is an output and the stimulus elsewhere."""
+    r = random.Random(170_000 + seed)
+    if r.random() >= .45:
+        return
+    side_dirs = bool(spec["side_w"]) and r.random() < .4
+    spec["pd"] = {"out_init": r.randrange(1 << spec["out_w"]), "side_dirs": side_dirs, "side_init": r.randrange(1 << spec["side_w"]) if spec["side_w"] else 0}
+    n = len(spec["states"])
+    for st in spec["states"]:
+        if st["kind"] in ("nop", "setx", "sety", "mov", "out_pins", "out_x", "out_y", "out_null") and r.random() < .3:
+            k = r.choice(["out_pindirs", "out_pindirs", "mov_pindirs", "set_dirs"])
+            if k == "set_dirs" and side_dirs:
+                k = "out_pindirs"          # the set group would be the side-set group's
+            if k == "mov_pindirs" and spec["chip"] == "rp2040":
+                k = "out_pindirs"
+            if k == "mov_pindirs":
+                st.update(kind="movg", mdst="pindirs", msrc=r.choice(["x", "y", "null", "isr", "osr", "pins"] + (["status"] if "status" in spec["shifter"] else [])), mop=r.choice(["none", "invert", "reverse"]))
+            elif k == "set_dirs":
+                st.update(kind="set_dirs", value=r.randrange(1 << spec["out_w"]))
+            else:
+                st.update(kind="out_pindirs", n=r.choice([spec["out_w"], spec["out_w"], r.randint(1, 8)]))
+    for j in range(spec["out_w"]):
+        spec["stim"][spec["out_base"] + j] = "".join(r.choice("01") for _ in range(r.randint(10, 40)))
+    if side_dirs:
+        for j in range(spec["side_w"]):
+            spec["stim"][spec["side_base"] + j] = "".join(r.choice("01") for _ in range(r.randint(10, 40)))
 
 
 NEW_DATA_KINDS = ["pull_ie", "pull_ie_nb", "push_if", "push_if_nb", "out_isr", "in_isr", "in_osr", "movg", "movg", "movg", "movg", "josre", "irq_set", "irq_set", "irq_clear",
@@ -477,10 +542,11 @@ def random_data_factory(spec):
 
     def factory():
         pl = PLATFORMS[spec["chip"]]()
-        res = [Resource("outbus", 0, Pins(" ".join(str(spec["out_base"] + k) for k in range(spec["out_w"])), dir="o")),
+        pd = spec.get("pd")
+        res = [Resource("outbus", 0, Pins(" ".join(str(spec["out_base"] + k) for k in range(spec["out_w"])), dir="io" if pd else "o")),
                Resource("inbus", 0, Pins(" ".join(str(spec["in_base"] + k) for k in range(spec["in_w"])), dir="i"))]
         if spec["side_w"]:
-            res.append(Resource("sidebus", 0, Pins(" ".join(str(spec["side_base"] + k) for k in range(spec["side_w"])), dir="o")))
+            res.append(Resource("sidebus", 0, Pins(" ".join(str(spec["side_base"] + k) for k in range(spec["side_w"])), dir="io" if pd and pd["side_dirs"] else "o")))
         pl.add_resources(res)
         return RandomDataDesign(spec), pl
     return factory
