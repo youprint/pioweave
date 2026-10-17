@@ -1,7 +1,7 @@
 """Tests of the emulator facts that were [verify] and are now taken from the datasheets. Every test names the section and the printed page it follows: RP2040 datasheet (build-date
 2025-02-20, build-version 3184e62-clean) and RP2350 datasheet (Release 8, build date 01/10/2026, build version 80d627281ed5). The expected values are worked out from those
 sentences, not from another implementation. Nothing here has run on a chip."""
-from pioweave.builder import (CLEAR, EXEC, NULL, PINDIRS, PINS, SET, STATUS, WAIT, X, Y, Program)
+from pioweave.builder import (CLEAR, EXEC, NULL, PINDIRS, PINS, SET, STATUS, WAIT, X, X_DEC, Y, Program)
 from pioweave.emulator import EmulationError, PioBlock, run_case
 
 from . import support
@@ -429,3 +429,66 @@ class DatasheetTests(support.TestCase):
         block.run(3)
         self.assertEqual(block.out_level & 1, 1)
         self.assertEqual(sm.sticky, {})
+
+
+@support.cases
+class DatasheetGapTests(support.TestCase):
+    """Directed tests added for the mutation survivors of the audit (COR-43, COR-47). Expected values are worked out from the datasheet sentences quoted in each test."""
+
+    def test_the_program_counter_wraps_only_when_it_equals_wrap_top(self):
+        # RP2040 3.5.2 p.333, step 2: "if PC matches EXECCTRL_WRAP_TOP, set PC to EXECCTRL_WRAP_BOTTOM" (matches = equals): a program that jumps past wrap_top does not wrap.
+        # 0: set x, 1   1: jmp 3 (wrap_top = 1)   2: set x, 9 (skipped)   3: set y, 5   4: set x, 7   5: jmp 5
+        p = prog()
+        p.wrap_target()
+        p.set(X, 1)
+        p.jmp("past")
+        p.wrap()
+        p.set(X, 9)
+        p.label("past")
+        p.set(Y, 5)
+        p.set(X, 7)
+        p.label("hang")
+        p.jmp("hang")
+        r = run_case(p, 12)
+        self.assertEqual((r.x, r.y), (7, 5))                 # a wrap at pc 3 (pc >= wrap_top) would run `set x, 1` again and never reach `set x, 7`
+
+    def test_jmp_x_decrement_also_decrements_when_it_falls_through(self):
+        # RP2040 3.4.2.2: "X--: branch if scratch X non-zero, post-decrement"; the decrement happens whether or not the branch is taken, so X = 0 becomes 0xFFFFFFFF
+        p = prog()
+        p.set(X, 0)
+        p.jmp("never", when=X_DEC)
+        p.label("never")
+        p.set(Y, 3)
+        r = run_case(p, 3)
+        self.assertEqual((r.x, r.y), (0xFFFFFFFF, 3))
+
+    def test_wait_0_irq_does_not_clear_the_flag(self):
+        # RP2040 3.4.9 / RP2350 11.4.9: only "wait 1 irq" clears the flag it waits for; "wait 0 irq" stalls while the flag is up and changes nothing
+        p = prog()
+        p.wait_irq(0, 3)
+        r = run_case(p, 8, on_error="stop")
+        self.assertEqual(r.irq, 0)                         # no flag was ever raised: the wait completes
+        b = PioBlock()
+        sm = b.sm[0]
+        sm.configure(program=b.load(p))
+        sm.enable()
+        b.irq_force(1 << 3)
+        for _ in range(6):
+            b.step()
+        self.assertEqual(b.irq, 1 << 3)                     # still up after six stalled cycles
+
+    def test_autopull_refills_in_the_same_cycle_the_threshold_is_reached(self):
+        # RP2040 3.5.4.2 (autopull): with PULL_THRESH = 8 the OSR is refilled from the TX FIFO as soon as 8 bits have been shifted out, if the FIFO has a word, so the next OUT does not
+        # stall. Cycle 0: the OSR is exhausted (count 32 >= 8), the first OUT stalls while it is refilled (pins still 0). Cycle 1: out pins, 8 -> 0xAA; the count reaches 8 and the
+        # OSR is refilled in the same cycle. Cycle 2: out pins, 8 -> 0x55, without a stall.
+        p = prog()
+        p.out(PINS, 8)
+        r = run_case(p, 3, tx=[0xAA, 0x55], out_base=0, out_count=8, dirs=0xFF, autopull=True, pull_thresh=8)
+        self.assertEqual([x & 0xFF for x in r.pads], [0x00, 0xAA, 0x55])
+
+    def test_autopull_stalls_when_the_count_is_exactly_the_threshold_and_the_fifo_is_empty(self):
+        # the same program with one word only: after the OUT of cycle 1 the OSR holds 0 bits (count 8 = threshold), the FIFO is empty, so the OUT of cycle 2 stalls and the pins keep 0xAA
+        p = prog()
+        p.out(PINS, 8)
+        r = run_case(p, 4, tx=[0xAA], out_base=0, out_count=8, dirs=0xFF, autopull=True, pull_thresh=8)
+        self.assertEqual([x & 0xFF for x in r.pads], [0x00, 0xAA, 0xAA, 0xAA])

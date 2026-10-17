@@ -343,7 +343,7 @@ def _c_sm_config(compiled, platform, name):
     return lines
 
 
-def _c_sync_bypass(compileds, base=0):
+def _c_sync_bypass(compileds):
     """The line of main.c that bypasses the 2-flip-flop input synchroniser for every GPIO a program reads (COR-02).
 
     The chip adds two system clock cycles of latency to every input unless the bit in INPUT_SYNC_BYPASS is set (RP2040 3.5.6.3 p.342, RP2350 11.5.6.3 p.824); the Amaranth reference

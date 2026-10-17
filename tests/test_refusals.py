@@ -531,6 +531,23 @@ class DataPathRefusalTests(RefusalCase):
             fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
         self.refuse(body, "side-set value differs between waiting and completing")
 
+    def test_side_set_must_agree_in_both_branches_of_a_test(self):
+        # COR-44: one PIO instruction applies one side-set value, so the two branches of a test (jmp pin) cannot drive the side-set pin differently
+        def body(m, pl):
+            side = pl.buffer(m, "o", "gpio", 3)
+            pl.pio_role(side, "side")
+            pin = pl.buffer(m, "i", "gpio", 4)
+
+            def a():
+                with m.If(pin.i):
+                    m.d.sync += side.o.eq(1)
+                    m.next = "B"
+                with m.Else():
+                    m.d.sync += side.o.eq(0)
+                    m.next = "A"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "side-set value differs between the two branches of the test")
+
     def test_a_blocking_operation_needs_its_helper(self):
         def states(m, sh, x, y, out, inp):
             def a():

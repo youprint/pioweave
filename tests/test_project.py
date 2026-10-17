@@ -432,3 +432,14 @@ class ChipStartStateTests(support.TestCase):
         for line in ('sm.exec("set(x, 0)")', 'sm.exec("set(y, 0)")', 'sm.exec("mov(isr, null)")', 'sm.exec("mov(osr, null)")', "sm.restart()"):
             self.assertIn(line, main)
         self.assertLess(main.index("sm.restart()"), main.index("sm.active(1)"))
+
+    def test_the_bypass_mask_is_64_bit_for_gpios_from_32_and_includes_jmp_and_direction_pins(self):
+        from types import SimpleNamespace
+
+        from pioweave.project import _c_sync_bypass
+        low = SimpleNamespace(input_gpios=[4], dynamic_gpios=[7], jmp_gpio=9)
+        self.assertIn("pio_set_input_sync_bypass_with_mask(pio, 0x290u, 0x290u);", _c_sync_bypass([low])[1])      # bits 4, 7, 9
+        high = SimpleNamespace(input_gpios=[40], dynamic_gpios=[], jmp_gpio=None)
+        self.assertIn("pio_set_input_sync_bypass_with_mask64(pio, 0x10000000000ull, 0x10000000000ull);", _c_sync_bypass([high])[1])      # bit 40
+        none = SimpleNamespace(input_gpios=[], dynamic_gpios=[], jmp_gpio=None)
+        self.assertEqual(_c_sync_bypass([none]), [])
