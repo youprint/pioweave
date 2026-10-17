@@ -9,10 +9,7 @@ headers (read 2026-10-17); the LED on GP25 and the flash sizes (Pico 2 MB, Pico 
     platform = PicoPlatform(sm_clock_hz=1_000_000)
     led = platform.buffer(m, "o", "led", 0)          # inside elaborate(); GPIO 25
 
-The Waveshare Core2350B page (waveshare.com/core2350b.htm, read 2026-10-17) confirms RP2350B, 48 GPIOs and 16 MB flash; the LED GPIO 39 and the default UART/I2C/SPI pins come from the SDK header only [verify on the board].
-
-The WeAct Studio RP2350B V1.0 schematic (RP2350B_SCH.pdf, supplied by the owner, read 2026-10-17; not stored in the repository) shows the blue LED on GPIO 25, the user key on GPIO 23 and the
-secondary flash / PSRAM chip select on GPIO 0 (through R14, 0 ohm). It has no default UART, I2C or SPI pins: those come from the Pico SDK header (`weact_studio_rp2350b_core.h`).
+The Waveshare Core2350B page (waveshare.com/core2350b.htm, read 2026-10-17) confirms RP2350B, 48 GPIOs and 16 MB flash, and its schematic (files.waveshare.com/wiki/Core2350B0/Core2350B.pdf, read 2026-10-17) confirms the red LED on GPIO 39 (470 ohm, active high) and shows GPIO 47 as the PSRAM chip select; it draws no user key and no default UART, I2C or SPI pins (those come from the SDK header) [verify on the board].
 
 Owner's boards (2026-10-17): the Raspberry Pi Pico (RP2040 target), the WeAct Studio RP2350B core and the Waveshare Core2350B.
 

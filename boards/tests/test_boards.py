@@ -90,3 +90,12 @@ def test_weact_board_matches_its_schematic():
     h = header("weact_studio_rp2350b_core")
     assert h["WEACT_STUDIO_RP2350B_PSRAM_CS_PIN"] == "0" and h["PICO_DEFAULT_LED_PIN"] == "25"
     assert "GPIO 0 is the chip select" in WeActStudioRP2350BCorePlatform.__doc__
+
+
+def test_waveshare_board_matches_its_schematic():
+    """Core2350B.pdf (Waveshare, read 2026-10-17): the red LED on GPIO 39, the PSRAM chip select on GPIO 47, no user key."""
+    p = WaveshareCore2350BPlatform()
+    assert gpios(p, "led") == [39] and "button" not in {r.name for r in WaveshareCore2350BPlatform.resources}
+    h = header("waveshare_core2350b")
+    assert h["WAVESHARE_CORE2350B_PSRAM_CS_PIN"] == "47"
+    assert "GPIO 47 is the PSRAM chip select" in WaveshareCore2350BPlatform.__doc__

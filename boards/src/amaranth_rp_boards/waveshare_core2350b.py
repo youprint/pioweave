@@ -7,6 +7,9 @@ __all__ = ["WaveshareCore2350BPlatform"]
 
 
 class WaveshareCore2350BPlatform(RP2350BPioPlatform):
-    """Waveshare Core2350B (RP2350B, QFN-80 with 48 GPIOs, 16 MB flash). The LED is GPIO 39. Pins from the Pico SDK header `waveshare_core2350b.h`; chip, 48 GPIOs and 16 MB flash also stated on waveshare.com/core2350b.htm (read 2026-10-17), which does not give the LED GPIO or the default UART/I2C/SPI pins (they are on the page's wiki image) [verify on the board]."""
+    """Waveshare Core2350B (RP2350B QFN-80, 48 GPIOs, 16 MB flash W25Q128JVSIQ, a PSRAM chip). Schematic (files.waveshare.com/wiki/Core2350B0/Core2350B.pdf, read 2026-10-17): the red LED
+    is on GPIO 39 (active high, 470 ohm to ground), GPIO 47 is the PSRAM chip select (net PSRAM_CS), BOOTSEL is the only key, and no default UART, I2C or SPI pins are drawn; those
+    (UART 0/1, I2C 4/5, SPI 18/19/16/17) come from the Pico SDK header `waveshare_core2350b.h` [verify on the board]. The product page waveshare.com/core2350b.htm states the chip,
+    48 GPIOs and 16 MB flash. A program should keep GPIO 47 free when it uses the PSRAM."""
     sdk_board = "waveshare_core2350b"
     resources = sdk_resources(48, led=39, uart=(0, 1), i2c=(4, 5), spi=(18, 19, 16, 17))
