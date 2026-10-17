@@ -13,7 +13,7 @@ Amaranth has one platform module per target (`amaranth.build.Platform`; the vend
 | `"micropython"` | the same, plus `NAME_pio.py` (written by `pioasm -o python`) and `main.py` |
 
     platform = RP2040PioPlatform(sm_clock_hz=1_000_000)
-    platform.build(SquareWave(), "square", "build/square", project="pico-c", factory=lambda: (SquareWave(), RP2040PioPlatform()), cycles=24)
+    platform.build(SquareWave(), "square", "build/square", project="pico-c", sim=SimOptions(factory=lambda: (SquareWave(), RP2040PioPlatform()), cycles=24))
 
 A PIO state machine is an FSM whose state is the program counter and that executes one instruction per clock cycle. A design written as one Amaranth FSM in which every state does what one PIO instruction does is therefore cycle-equivalent to the program, and the Amaranth simulation of the design is the reference. The compiler maps one FSM state to one instruction and refuses everything that would change the cycle behaviour.
 

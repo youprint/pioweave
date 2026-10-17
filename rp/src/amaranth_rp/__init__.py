@@ -8,9 +8,10 @@ from ._compat import UnsupportedAmaranth, check_version
 from .compile import Compiled, PioCompileError, compile_design
 from .platform import (PLATFORMS, RP2040PioPlatform, RP2350APioPlatform, RP2350BPioPlatform, RP2350PioPlatform, RP2354APioPlatform, RP2354BPioPlatform,
                        RP2354PioPlatform)
-from .project import PioProjectError, amaranth_waves, find_pioasm, write_project
+from .designs import PioDesign
+from .project import PioProjectError, SimOptions, amaranth_run, amaranth_waves, find_pioasm, write_project
 
 __all__ = ["UnsupportedAmaranth", "check_version", "Compiled", "PioCompileError", "compile_design", "PLATFORMS", "RP2040PioPlatform", "RP2350PioPlatform",
            "RP2350APioPlatform", "RP2350BPioPlatform", "RP2354PioPlatform", "RP2354APioPlatform", "RP2354BPioPlatform", "PioProjectError", "amaranth_waves",
-           "find_pioasm", "write_project"]
+           "find_pioasm", "write_project", "SimOptions", "amaranth_run", "PioDesign"]
 __version__ = "0.1.0"

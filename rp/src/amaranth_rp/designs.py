@@ -5,10 +5,19 @@ Each one is an ordinary Amaranth Elaboratable: one FSM, pins from platform.buffe
 is one PIO instruction (one clock cycle); states without effects that follow an instruction become its delay. The comments give the cycle count.
 `PROGRAMS` maps a name to (design class, platform name, simulation stimulus, cycles) for the project writers and the tests.
 """
-from amaranth.hdl import Elaboratable, Module
+from amaranth.hdl import Module
+from amaranth.lib import wiring
 
 
-class SquareWave(Elaboratable):
+class PioDesign(wiring.Component):
+    """Base class of a design for the PIO platforms: an `amaranth.lib.wiring.Component` without ports of its own (its pins come from the platform, `platform.buffer()`,
+    and its data path from `platform.shifter()`). Any Elaboratable works as well; this is the form current Amaranth recommends for a module with an interface."""
+
+    def __init__(self):
+        super().__init__(wiring.Signature({}))
+
+
+class SquareWave(PioDesign):
     """A square wave on GPIO 0: 2 cycles high, 2 cycles low (period 4 cycles)."""
 
     def elaborate(self, platform):
@@ -28,7 +37,7 @@ class SquareWave(Elaboratable):
         return m
 
 
-class PulseTrain(Elaboratable):
+class PulseTrain(PioDesign):
     """Three pulses of 2 cycles high / 2 low on GPIO 0, then 4 idle cycles, repeated; X counts the pulses (one `jmp x--` per pulse)."""
 
     def elaborate(self, platform):
@@ -64,7 +73,7 @@ class PulseTrain(Elaboratable):
         return m
 
 
-class ButtonPulse(Elaboratable):
+class ButtonPulse(PioDesign):
     """Waits for GPIO 4 to go high, drives GPIO 0 high for 3 cycles, waits for GPIO 4 to go low again (`wait`), and repeats."""
 
     def elaborate(self, platform):
@@ -91,7 +100,7 @@ class ButtonPulse(Elaboratable):
         return m
 
 
-class ClockedBits(Elaboratable):
+class ClockedBits(PioDesign):
     """A clock on GPIO 1 (side-set) and a data pin on GPIO 0 (set pins): the data pin gets 1, 0, 1 and the clock toggles with every bit."""
 
     def elaborate(self, platform):
@@ -123,7 +132,7 @@ class ClockedBits(Elaboratable):
         return m
 
 
-class PinBranch(Elaboratable):
+class PinBranch(PioDesign):
     """GPIO 4 selects the pattern on GPIO 0: when it is high the output pulses twice (jmp pin), otherwise once."""
 
     def elaborate(self, platform):
@@ -161,7 +170,7 @@ class PinBranch(Elaboratable):
         return m
 
 
-class HighPins(Elaboratable):
+class HighPins(PioDesign):
     """For the 48-GPIO parts (RP2350B, RP2354B): a pulse on GPIO 40 when GPIO 44 is high, a clock on GPIO 41 (side-set). The PIO window is GPIO 16 to 47,
     so the compiler picks GPIO base 16; `wait gpio 44` keeps the real number and the SDK flips bit 4 when it loads the program."""
 
@@ -192,7 +201,7 @@ class HighPins(Elaboratable):
         return m
 
 
-class UartTx(Elaboratable):
+class UartTx(PioDesign):
     """8N1 UART transmitter on GPIO 0, 2 clock cycles per bit: the program of the Pico SDK's uart_tx example written as an FSM. One word from the TX FIFO is one
     frame (low 8 bits, least significant first). The pin is driven by side-set (idle level and start bit) and by `out pins`."""
 
@@ -223,7 +232,7 @@ class UartTx(Elaboratable):
         return m
 
 
-class UartRx(Elaboratable):
+class UartRx(PioDesign):
     """8N1 UART receiver on GPIO 4, 8 clock cycles per bit (the Pico SDK's uart_rx example): wait for the start bit, sample the middle of every data bit with
     `in pins, 1` (shifting right: the byte ends up in bits 31..24 of the word), push the word."""
 
@@ -260,7 +269,7 @@ class UartRx(Elaboratable):
         return m
 
 
-class ByteSwap(Elaboratable):
+class ByteSwap(PioDesign):
     """Pulls a word, splits two bytes into X and Y with `out x, 8` / `out y, 8` (shifting left: the most significant byte first), and pushes them in the other
     order with `in y, 8` / `in x, 8` (shifting left), after 16 zero bits from `in null, 16`: one word in, one word out."""
 
@@ -292,7 +301,7 @@ class ByteSwap(Elaboratable):
         return m
 
 
-class NoBlockEcho(Elaboratable):
+class NoBlockEcho(PioDesign):
     """`pull noblock` and `push noblock`: X holds 21; each round loads the OSR from the TX FIFO, or from X when the FIFO is empty, and sends it on. With a drained
     RX FIFO nothing is lost; without draining, the fifth word is dropped (the ISR is cleared either way)."""
 

@@ -139,22 +139,39 @@ class _RPPioPlatform(Platform):
         return ClockDomain(name, reset_less=True)
 
     # ---- build
-    def build(self, elaboratable, name="top", build_dir="build", do_build=True, program_opts=None, do_program=False, **kwargs):
-        """Same signature as amaranth.build.Platform.build. `project` selects what is written (pio, pico-c, micropython); `factory`, `cycles` and `stim`
-        feed the reference simulation (see pio_project.py). Loading a board is not done here: bitweave does it (program --pico)."""
+    _LEGACY_SIM = ("factory", "cycles", "stim", "tx", "tx_feed", "drain")
+
+    def build(self, elaboratable, name="top", build_dir="build", do_build=True, program_opts=None, do_program=False, *, project="pio", sim=None, **legacy):
+        """The signature of amaranth.build.Platform.build plus two keyword-only options: `project` selects what is written (pio, pico-c, micropython) and `sim`
+        (a `SimOptions`) feeds the reference simulation (see project.py). Loading a board is not done here: bitweave does it (program --pico).
+        The keywords `factory`, `cycles`, `stim`, `tx`, `tx_feed` and `drain` of earlier versions still work and give a DeprecationWarning."""
         if do_program:
             raise NotImplementedError("loading a board is done by bitweave (program --pico --yes), never by the platform")
-        plan = self.prepare(elaboratable, name, **kwargs)
+        sim = self._sim_options(sim, legacy)
+        plan = self.prepare(elaboratable, name, project=project, sim=sim)
         if not do_build:
             return plan
         return plan.execute_local(build_dir)
 
-    def prepare(self, elaboratable, name="top", project="pio", **kwargs):
+    def _sim_options(self, sim, legacy):
+        import warnings
+        from .project import SimOptions
+        unknown = sorted(set(legacy) - set(self._LEGACY_SIM))
+        if unknown:
+            raise TypeError("build() got unexpected keyword arguments: %s" % ", ".join(unknown))
+        if legacy:
+            if sim is not None:
+                raise TypeError("pass either sim=SimOptions(...) or the old keywords %s, not both" % ", ".join(sorted(legacy)))
+            warnings.warn("build(%s=...) is deprecated: pass sim=SimOptions(...)" % sorted(legacy)[0], DeprecationWarning, stacklevel=3)
+            sim = SimOptions(**legacy)
+        return sim
+
+    def prepare(self, elaboratable, name="top", project="pio", sim=None):
         from .compile import compile_design
         from .project import write_project
         compiled = compile_design(elaboratable, self, name)
         plan = BuildPlan(script="build_" + name)
-        write_project(plan, compiled, self, name, project, elaboratable=elaboratable, **kwargs)
+        write_project(plan, compiled, self, name, project, sim)
         return plan
 
     def toolchain_prepare(self, fragment, name, **kwargs):     # prepare() above does not go through the generic path

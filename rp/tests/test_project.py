@@ -16,7 +16,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 import cosim  # noqa: E402
 from amaranth_rp import designs as pio_designs  # noqa: E402
 from amaranth_rp.project import PioProjectError, find_pioasm  # noqa: E402
-from amaranth_rp.platform import PLATFORMS  # noqa: E402
+from amaranth_rp.platform import PLATFORMS
+from amaranth_rp.project import SimOptions  # noqa: E402
 
 BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
@@ -30,10 +31,8 @@ def build(tmp_path, example, kind, hz=None, with_factory=True):
     factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=hz))  # noqa: E731
     design, pl = factory()
     out = tmp_path / kind
-    kw = dict(project=kind, cycles=cycles, stim=stim, **opts)
-    if with_factory:
-        kw["factory"] = factory
-    pl.build(design, example, str(out), **kw)
+    sim = SimOptions(factory=factory if with_factory else None, cycles=cycles, stim=stim, **opts)
+    pl.build(design, example, str(out), project=kind, sim=sim)
     return out
 
 
@@ -172,3 +171,35 @@ def test_generated_c_project_builds_with_the_pico_sdk(tmp_path, example):
     with open(res["record"]) as fh:
         rec = json.load(fh)["extra"]["firmware:" + example]
     assert os.path.getsize(rec["uf2"]) > 1000 and rec["flash_bytes"] > 1000
+
+
+def test_the_old_build_keywords_still_work_and_warn(tmp_path):
+    cls, chip, stim, cycles, opts = pio_designs.entry("clocked_bits")
+    factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
+    new = build(tmp_path / "new", "clocked_bits", "pio")
+    design, pl = factory()
+    with pytest.warns(DeprecationWarning, match="sim=SimOptions"):
+        pl.build(design, "clocked_bits", str(tmp_path / "old"), project="pio", factory=factory, cycles=cycles, stim=stim)
+    assert read(tmp_path / "old" / "bitweave.toml") == read(new / "bitweave.toml")
+    d2, p2 = factory()
+    d2._MustUse__silence = True
+    with pytest.raises(TypeError, match="either sim=SimOptions"):
+        p2.build(d2, "x", str(tmp_path / "x"), sim=SimOptions(), cycles=3)
+    with pytest.raises(TypeError, match="unexpected keyword arguments: colour"):
+        p2.build(d2, "x", str(tmp_path / "x"), colour="red")
+
+
+def test_designs_are_wiring_components_and_the_fifo_model_has_a_signature():
+    from amaranth.lib import wiring
+
+    from amaranth_rp import PioDesign
+    from amaranth_rp.data import FifoModel
+    for name, entry in pio_designs.PROGRAMS.items():
+        d = entry[0]()
+        assert isinstance(d, PioDesign) and isinstance(d, wiring.Component) and not list(d.signature.members), name
+        d._MustUse__silence = True
+    f = FifoModel()
+    f._MustUse__silence = True
+    members = dict(f.signature.members.items())
+    assert members["tx_pop"].flow == wiring.In and members["tx_ready"].flow == wiring.Out
+    assert len(f.tx_head) == 32 and len(f.host_tx_dropped) == 8

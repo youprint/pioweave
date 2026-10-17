@@ -23,8 +23,9 @@ registers (`op`, `arg`) and checks that the statements of a state on the shifter
 """
 import contextlib
 
-from amaranth.hdl import Cat, Const, Elaboratable, Module, Mux, Signal
-from amaranth.hdl import Array
+from amaranth.hdl import Array, Cat, Const, Module, Mux, Signal
+from amaranth.lib import wiring
+from amaranth.lib.wiring import In, Out
 
 DEPTH = 4          # words in each FIFO (RP2040 datasheet 3.5.3, RP2350 datasheet 11.4; joining the two FIFOs to 8 is not modelled)
 
@@ -36,31 +37,25 @@ NAMES = {PULL_BLOCK: "pull block", PULL_NOBLOCK: "pull noblock", PUSH_BLOCK: "pu
          OUT_Y: "out y", OUT_NULL: "out null", IN_PINS: "in pins", IN_X: "in x", IN_Y: "in y", IN_NULL: "in null"}
 
 
-class FifoModel(Elaboratable):
+class FifoModel(wiring.Component):
     """The two FIFOs of a state machine, seen from the design (`tx_ready`, `tx_head`, `rx_space`, and the toggles `tx_pop` / `rx_push` with `rx_data`) and from
     the host (the `host_*` signals, driven by a testbench). A word taken or stored by the design in cycle t is applied one clock edge later, and the flags and the
-    head of the FIFO already account for it, so the next instruction sees what the PIO shows it."""
+    head of the FIFO already account for it, so the next instruction sees what the PIO shows it. The members of its signature are the signals; `In` means the design
+    or the host drives it, `Out` means the model drives it."""
 
     def __init__(self, tx_init=()):
         self.tx_init = list(tx_init)[:DEPTH]
-        # driven by the design
-        self.tx_pop = Signal()
-        self.rx_push = Signal()
-        self.rx_data = Signal(32)
-        # read by the design
-        self.tx_ready = Signal()
-        self.tx_head = Signal(32)
-        self.rx_space = Signal()
-        # the host side: a write into the TX FIFO, a read of the RX FIFO, and what a testbench needs to see
-        self.host_tx_en = Signal()
-        self.host_tx_data = Signal(32)
-        self.host_rx_pop = Signal()
-        self.host_rx_level = Signal(3)
-        self.host_rx_head = Signal(32)
-        self.host_rx_pending = Signal()          # the design pushed in the previous cycle: host_rx_data is that word
-        self.host_rx_data = Signal(32)
-        self.host_tx_level = Signal(3)
-        self.host_tx_dropped = Signal(8)
+        super().__init__(wiring.Signature({
+            # driven by the design
+            "tx_pop": In(1), "rx_push": In(1), "rx_data": In(32),
+            # read by the design
+            "tx_ready": Out(1), "tx_head": Out(32), "rx_space": Out(1),
+            # the host side: a write into the TX FIFO, a read of the RX FIFO, and what a testbench needs to see
+            "host_tx_en": In(1), "host_tx_data": In(32), "host_rx_pop": In(1),
+            "host_rx_level": Out(3), "host_rx_head": Out(32),
+            "host_rx_pending": Out(1),          # the design pushed in the previous cycle: host_rx_data is that word
+            "host_rx_data": Out(32), "host_tx_level": Out(3), "host_tx_dropped": Out(8),
+        }))
 
     def elaborate(self, platform):
         m = Module()

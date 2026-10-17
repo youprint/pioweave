@@ -14,6 +14,7 @@ case is written without expectations. `cycles` is the simulation length, `stim` 
 Nothing generated here has run on a chip. The C project was built with the Pico SDK through `bitweave firmware` in the tests; the MicroPython files
 use the rp2 module as documented and were not run on a device [verify].
 """
+import dataclasses
 import os
 import re
 import shutil
@@ -25,6 +26,21 @@ from amaranth.hdl import ClockDomain, Module
 from amaranth.sim import Simulator
 
 from ._compat import Fragment, clock_period
+
+
+@dataclasses.dataclass
+class SimOptions:
+    """What the reference simulation of a design needs, passed to `platform.build(..., sim=SimOptions(...))`.
+
+    `factory`: a callable returning a fresh `(design, platform)` pair (a design requests its pins from the platform when it is elaborated, so every run needs new
+    ones); without it the project has no expectations. `cycles`: length of the simulation. `stim`: input waveforms {gpio: "0101..."}. `tx`: words in the TX FIFO at
+    cycle 0. `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them. `drain`: the host empties the RX FIFO every cycle."""
+    factory: object = None
+    cycles: int = 64
+    stim: dict = dataclasses.field(default_factory=dict)
+    tx: tuple = ()
+    tx_feed: tuple = ()
+    drain: bool = True
 
 
 class PioProjectError(Exception):
@@ -272,9 +288,11 @@ def _readme(compiled, name, project, platform, have_golden):
     return "\n".join(out) + "\n"
 
 
-def write_project(plan, compiled, platform, name, project, elaboratable=None, factory=None, cycles=64, stim=None, tx=(), tx_feed=(), drain=True, **ignored):
+def write_project(plan, compiled, platform, name, project, sim=None):
     if project not in ("pio", "pico-c", "micropython"):
         raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'")
+    sim = sim or SimOptions()
+    factory, cycles, stim, tx, tx_feed, drain = sim.factory, sim.cycles, sim.stim, tuple(sim.tx), tuple(sim.tx_feed), sim.drain
     run = amaranth_run(factory, cycles, stim, tx, tx_feed, drain) if factory is not None else None
     golden = golden_rx = None
     if run is not None:

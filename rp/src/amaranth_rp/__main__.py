@@ -14,6 +14,7 @@ import os
 import sys
 
 from . import designs
+from .project import SimOptions
 from .platform import PLATFORMS
 
 
@@ -70,7 +71,7 @@ def main(argv=None):
     factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=a.clock_hz))  # noqa: E731
     design, platform = factory()
     out = os.path.join(a.outdir, "project")
-    platform.build(design, name, out, project=a.project, factory=factory, cycles=cycles, stim=stim, **opts)
+    platform.build(design, name, out, project=a.project, sim=SimOptions(factory=factory, cycles=cycles, stim=stim, **opts))
     print("EMIT " + json.dumps({"path": os.path.join(out, name + ".pio")}))
     return 0
 
