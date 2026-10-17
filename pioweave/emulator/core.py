@@ -104,7 +104,7 @@ class Config:
     Attributes
     ----------
     in_base, in_count : int
-        First pin of the IN mapping and its width (32 at reset; IN_COUNT exists on PIO version 1 only, RP2350 Table 1053 p.858).
+        First pin of the IN mapping and its width (32 at reset; IN_COUNT exists on PIO version 1 only, RP2350 Table 1053 p.858; `StateMachine.configure` takes 0 as 32, the register encoding).
     out_base, out_count : int
         First pin of the OUT mapping and its width (0 at reset, RP2040 Table 386 p.378).
     set_base, set_count : int
@@ -321,6 +321,10 @@ class StateMachine:
                 raise ValueError("%s must be 1..32" % key)
         if c.fifo_join not in ("none", "tx", "rx", "both", "rx_put", "rx_get", "rx_put_get"):
             raise ValueError("fifo_join: none, tx, rx, both, rx_put, rx_get or rx_put_get")
+        if not 0 <= c.in_count <= 32:
+            raise ValueError("in_count is 0 to 32")
+        if c.in_count == 0:                       # RP2350 Table 1053 p.857-858: "A count of 32 is encoded with a field value of 0"
+            c.in_count = 32
         if c.status_sel not in ("tx", "rx", "irq"):
             raise ValueError("status_sel: tx, rx or irq")
         if c.status_sel == "irq" and self.block.version < 1:
@@ -449,7 +453,7 @@ class StateMachine:
                 raise EmulationError("MOV status refers to an IRQ flag of another PIO block that is not part of this emulation")
             on = bool(block.irq & (1 << flag))
         elif c.status_sel == "rx":
-            on = len(self.rx) < c.status_n
+            on = len(self.rx) < c.status_n        # [verify] status_n above the FIFO depth is accepted here (the RP2350 datasheet calls such values reserved)
         else:
             on = len(self.tx) < c.status_n
         return MASK32 if on else 0
@@ -496,7 +500,7 @@ class StateMachine:
     def _exec(self, word, view, ctx):
         """Execute one word. Returns (status, jump) with status 'done' or 'stall'; pin writes go to ctx.writes, IRQ changes to ctx.irq_set / ctx.irq_clear."""
         c, blk = self.cfg, self.block
-        first = not self.side_done
+        first = not self.side_done      # [verify] side-set is applied once per instruction, not again on each retry of a stalled one (the datasheet says: on the first cycle)
         op, a = word >> 13, word & 0xFF
         is_out = False
         jump = None
@@ -550,6 +554,8 @@ class StateMachine:
             res = "done" if level == pol else "stall"
         elif op == 2:                                                        # IN
             n = 32 if a & 31 == 0 else a & 31
+            # [verify on a chip] a stalled IN with autopush (RX FIFO full) is modelled as shifting once and retrying only the push; the datasheet pseudocode (RP2040 3.5.4.1 p.337)
+            # does not say whether the retry shifts again (audit COR-09)
             if not self.in_shifted:
                 s = (a >> 5) & 7
                 if s == 0:
@@ -602,7 +608,7 @@ class StateMachine:
                     self.exec_word = data & 0xFFFF
                 self._background_pull()
         elif op == 4:                                                        # PUSH / PULL (and MOV to / from the RX FIFO registers on version 1)
-            if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0 and not word & 4:
+            if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0:       # bits 7:4 = x001 (RP2350 Table 1027); Index is bits 2:0, IdxI bit 3
                 if not word & 8 and word & 7:
                     raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.810)")
                 idx = (word & 3) if word & 8 else (self.y & 3)

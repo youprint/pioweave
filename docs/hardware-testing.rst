@@ -178,6 +178,10 @@ These steps need single system clock cycles to be visible, so they run with the 
      - OUT_STICKY and INLINE_OUT_EN (RP2040 Table 382)
      - SM0 writes a pin every cycle, SM1 has OUT_STICKY set and writes once; with INLINE_OUT_EN the enable bit deasserts
      - settles the ``[verify]`` in :doc:`emulator`: record the pin, then change the emulator if it differs
+   * - HW-31
+     - IN with autopush that stalls on a full RX FIFO: does the retry shift again? (RP2040 3.5.4.1 p.337 is silent; the emulator shifts once, ``[verify]`` in :doc:`emulator`)
+     - the program leaves the RX FIFO undrained until it holds 4 words, with autopush at 8 bits; its next instruction is ``in isr, 8`` on an ISR whose content is known (so a second shift would change the word); the host waits 1 ms, reads one word, then reads the word that the stalled IN pushes
+     - the pushed word equals the emulator's prediction for a single shift, or the prediction for a second shift: record which, then change the emulator or the tag
 
 The 48-GPIO window
 ~~~~~~~~~~~~~~~~~~

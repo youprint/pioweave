@@ -729,3 +729,15 @@ class IrqTests(support.TestCase):
         c, a, b = both_ways(data_design(body, chip="rp2350", status="irq", status_n=6), cycles=30, irq_clear=[(7, 6)])
         self.assertTrue("irq set 6 rel" in c.program.pio_text() and c.sim_config()["status_sel"] == "irq" and c.irq_rel)
         self.assertEqual(a["waves"][0][:4], "0011")           # mov x, status sees flag 6 (raised in the cycle before) and mov pins, x shows its bit 0
+
+
+@support.cases
+class SimConfigTests(support.TestCase):
+    @support.parametrize("name", sorted(pio_designs.PROGRAMS))
+    def test_sim_config_with_the_chip_version_runs_in_the_emulator(self, name):
+        # COR-13: the docstring of Compiled.sim_config promised keyword arguments of run_case; they need the PIO version of the chip (gpio_base 16 needs version 1)
+        from pioweave.builder import CHIP_VERSION
+        from pioweave.emulator import run_case
+        cls, chip, stim, cycles, opts = pio_designs.entry(name)
+        c = compile_factory(lambda: (cls(), PLATFORMS[chip]()), name)
+        run_case(c.program, 5, version=CHIP_VERSION[c.chip], on_error="stop", **c.sim_config())

@@ -492,3 +492,34 @@ class DatasheetGapTests(support.TestCase):
         p.out(PINS, 8)
         r = run_case(p, 4, tx=[0xAA], out_base=0, out_count=8, dirs=0xFF, autopull=True, pull_thresh=8)
         self.assertEqual([x & 0xFF for x in r.pads], [0x00, 0xAA, 0xAA, 0xAA])
+
+    def test_mov_rxfifo_with_idxi_indexes_by_the_two_low_bits_of_index(self):
+        # RP2350 11.4.8.2 p.809: "If IdxI (index by immediate) is set, the RX FIFO's registers are indexed by the two least-significant bits of the Index operand." Encoding
+        # (Table 1027): 100 delay/side-set 0001 IdxI Index. Index 5 = 0b101: register 1.
+        b = PioBlock(version=1)
+        sm = b.sm[0]
+        b.mem[0] = 0x8000 | 0x10 | 0x08 | 5                       # mov rxfifo[5 -> 1], isr
+        sm.configure(fifo_join="rx_put")
+        sm.isr = 0x1234
+        sm.enable()
+        b.step()
+        self.assertEqual(sm.rx_regs, [0, 0x1234, 0, 0])
+
+    def test_mov_rxfifo_index_without_idxi_must_be_zero(self):
+        # the same page: "When IdxI is clear, all non-zero values of Index are reserved encodings, and their operation is undefined" (also Index 4..7)
+        for index in (1, 4, 7):
+            b = PioBlock(version=1)
+            b.mem[0] = 0x8000 | 0x10 | index
+            b.sm[0].configure(fifo_join="rx_put")
+            b.sm[0].enable()
+            with self.assertRaisesRegex(EmulationError, "reserved encoding"):
+                b.step()
+
+    def test_in_count_zero_means_32_pins(self):
+        # RP2350 Table 1053 p.857-858 (SHIFTCTRL IN_COUNT): "A count of 32 is encoded with a field value of 0"; mov x, pins then reads all 32 pins
+        p = prog("rp2350")
+        p.mov(X, PINS)
+        r = run_case(p, 2, version=1, stim={k: "1" for k in range(32)}, in_base=0, in_count=0)
+        self.assertEqual(r.x, 0xFFFFFFFF)
+        r = run_case(p, 2, version=1, stim={k: "1" for k in range(32)}, in_base=0, in_count=8)
+        self.assertEqual(r.x, 0xFF)

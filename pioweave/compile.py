@@ -233,7 +233,20 @@ class Compiled:
         Returns
         -------
         dict
-            The configuration, usable as keyword arguments of `pioweave.emulator.run_case`.
+            The configuration, usable as keyword arguments of `pioweave.emulator.run_case` together with ``version=CHIP_VERSION[compiled.chip]``
+            (`pioweave.builder.CHIP_VERSION`: ``run_case`` defaults to PIO version 0, which refuses a ``gpio_base`` of 16 and the RP2350-only keys);
+            `pioweave.emulator.run_compiled` does that for you.
+
+        Examples
+        --------
+        >>> from pioweave import PLATFORMS, compile_design, designs
+        >>> from pioweave.builder import CHIP_VERSION
+        >>> from pioweave.emulator import run_case
+        >>> cls, chip, stim, cycles, opts = designs.entry("high_pins")
+        >>> c = compile_design(cls(), PLATFORMS[chip](), "high_pins")
+        >>> c.sim_config()["gpio_base"]
+        16
+        >>> r = run_case(c.program, 4, version=CHIP_VERSION[c.chip], **c.sim_config())
         """
         c = {}
         if self.set_pin:
