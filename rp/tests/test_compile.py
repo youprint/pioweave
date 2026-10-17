@@ -33,13 +33,14 @@ def compile_factory(factory, name="t"):
 @needs_tools
 @pytest.mark.parametrize("name", sorted(pio_designs.PROGRAMS))
 def test_examples_match_the_pio_simulator(name):
-    cls, chip, stim, cycles = pio_designs.PROGRAMS[name]
+    cls, chip, stim, cycles, opts = pio_designs.entry(name)
     factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
     compiled = compile_factory(factory, name)
-    a = cosim.amaranth_waves(factory, cycles, stim)
-    b = cosim.pio_waves(compiled, cycles, stim)
-    assert a == b
-    assert any("1" in w for w in a.values()), "the example should drive something"
+    a = cosim.amaranth_run(factory, cycles, stim, **opts)
+    b = cosim.pio_run(compiled, cycles, stim, tx=opts.get("tx", ()), tx_feed=opts.get("tx_feed", ()), drain=opts.get("drain", True))
+    assert a["waves"] == b["waves"]
+    assert a["rx"] == b["rx"] and a["tx_left"] == b["tx_left"] and a["rx_left"] == b["rx_left"]
+    assert any("1" in w for w in a["waves"].values()) or a["rx"], "the example should drive something"
 
 
 def test_square_wave_compiles_to_two_instructions():
@@ -339,3 +340,84 @@ def test_forward_references_compile_when_the_order_matches():
         _chain(m, [("A", a), ("B", b)])
     c, waves = _cosim(body, cycles=10)
     assert waves[0] == "1010101010"
+
+
+# ----------------------------------------------------------------------------- the data path (FIFOs, OSR, ISR)
+def run_both(name, **override):
+    cls, chip, stim, cycles, opts = pio_designs.entry(name)
+    opts = dict(opts, **override)
+    factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
+    compiled = compile_factory(factory, name)
+    a = cosim.amaranth_run(factory, cycles, stim, **opts)
+    b = cosim.pio_run(compiled, cycles, stim, tx=opts.get("tx", ()), tx_feed=opts.get("tx_feed", ()), drain=opts.get("drain", True))
+    return compiled, a, b
+
+
+def test_uart_tx_compiles_to_the_sdk_program():
+    c = compile_factory(lambda: (pio_designs.UartTx(), RP2040PioPlatform()), "uart_tx")
+    text = c.program.pio_text()
+    for line in ("pull block side 1 [1]", "set x, 7 side 0", "out pins, 1", "jmp x-- s_BIT"):
+        assert line in text, text
+    assert c.sim_config() == {"sideset_base": 0, "dirs": 1, "out_base": 0, "out_count": 1, "out_shift": "right"}
+    assert c.uses_tx and not c.uses_rx
+
+
+@needs_tools
+def test_uart_tx_sends_frames_like_the_amaranth_design():
+    c, a, b = run_both("uart_tx")
+    assert a["waves"] == b["waves"]
+    wave = a["waves"][0]
+    # idle high, then the start bit (low for the one cycle of `set x, 7 side 0`), then 0x55 least significant bit first at two cycles per bit (out + jmp)
+    frame = wave[wave.index("0"):][:17]
+    assert frame == "0" + "".join(c * 2 for c in "10101010") and a["tx_left"] == 0
+
+
+@needs_tools
+def test_uart_rx_receives_the_bytes():
+    c, a, b = run_both("uart_rx")
+    assert a["rx"] == b["rx"] and [w for _, w in a["rx"]] == [0x5A000000, 0xC3000000]
+    assert c.sim_config()["in_base"] == 4 and c.in_shift == "right" and c.uses_rx and not c.uses_tx
+
+
+@needs_tools
+def test_byte_swap_uses_x_y_null_and_left_shifts():
+    c, a, b = run_both("byte_swap")
+    assert a["rx"] == b["rx"]
+    # 0x11223344: X = 0x11, Y = 0x22, ISR = 0 (16 bits) then Y (0x22) then X (0x11)
+    assert a["rx"][0][1] == 0x00002211 and a["rx"][1][1] == 0x0000BBAA
+    assert "in null, 16" in c.program.pio_text() and c.out_shift == "left" and c.in_shift == "left"
+
+
+@needs_tools
+def test_noblock_pull_and_push():
+    c, a, b = run_both("noblock_echo")
+    assert a["rx"] == b["rx"] and [w for _, w in a["rx"]][:3] == [7, 9, 21]
+    # without draining the RX FIFO fills up after four words; the fifth is dropped by `push noblock` in both models
+    c, a, b = run_both("noblock_echo", drain=False)
+    assert cosim.same_rx(a, b, drain=False) and a["rx_left"] == b["rx_left"] == 4 and [w for _, w in a["rx"]] == [7, 9, 21, 21]
+    assert a["waves"] == b["waves"]
+    assert a["tx_left"] == b["tx_left"] == 0
+
+
+@needs_tools
+def test_blocking_pull_stalls_until_the_host_writes():
+    c, a, b = run_both("byte_swap", tx=[], tx_feed=[(30, 0x01020304)])
+    assert a["rx"] == b["rx"] and a["rx"] and a["rx"][0][0] > 30 and a["rx"][0][1] == 0x00000201
+    c, a, b = run_both("byte_swap", tx=[], tx_feed=[])
+    assert a["rx"] == b["rx"] == [] and a["tx_left"] == b["tx_left"]
+
+
+# ----------------------------------------------------------------------------- random designs with a data path
+@needs_tools
+@pytest.mark.parametrize("seed", range(N))
+def test_random_data_path_designs_match_the_pio_simulator(seed):
+    spec = cosim.random_data_spec(seed)
+    factory = cosim.random_data_factory(spec)
+    compiled = compile_factory(factory, "rnd")
+    cycles = 160
+    a = cosim.amaranth_run(factory, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"])
+    b = cosim.pio_run(compiled, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"])
+    why = "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec)
+    assert {g: w for g, w in a["waves"].items() if g in b["waves"]} == b["waves"], why
+    assert cosim.same_rx(a, b, spec["drain"]), why
+    assert (a["tx_left"], a["rx_left"]) == (b["tx_left"], b["rx_left"]), why

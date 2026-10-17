@@ -413,3 +413,199 @@ def test_chip_gating():
     for chip in (RP2040PioPlatform, RP2350PioPlatform):
         c = compile_body(mov_pindirs_like, chip=chip)
         assert "wait 0 gpio 4" in c.program.pio_text()
+
+
+# ----------------------------------------------------------------------------- the data path
+def data_body(states, shifts=("right", "right"), pins=("o",)):
+    """A design with a shifter, the scratch registers and (optionally) an output and an input pin group; `states` gets (m, sh, x, y, out, inp) and returns [(name, fn)]."""
+    def body(m, pl):
+        sh = pl.shifter(m, out_shift=shifts[0], in_shift=shifts[1])
+        x, y = pl.scratch("x"), pl.scratch("y")
+        out = pl.buffer(m, "o", "gpio", 0)
+        inp = pl.buffer(m, "i", "gpio", 8)
+        fsm_states(m, states(m, sh, x, y, out, inp))
+    return body
+
+
+def test_blocking_pull_must_continue_with_the_next_state():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            with sh.pull(m):
+                m.next = "C"
+        return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(states), "blocking pull / push must continue with the next state")
+
+
+def test_two_data_operations_in_one_state():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            sh.out(m, "x", 4)
+            sh.in_(m, "y", 4)
+            m.next = "A"
+        return [("A", a)]
+    refuse(data_body(states), "do not match")
+
+
+def test_data_operation_and_register_or_pin_in_one_state():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            sh.out(m, "null", 4)
+            m.d.sync += y.eq(3)
+            m.next = "A"
+        return [("A", a)]
+    refuse(data_body(states), "needs two PIO instructions")
+
+
+def test_data_operation_and_jump_in_one_state():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            sh.in_(m, "x", 4)
+            m.next = "C"
+        return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(states), "then jumps to another state")
+
+
+def test_data_operation_in_a_state_with_a_test():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            sh.out(m, "null", 4)
+            with m.If(x != 0):
+                m.next = "A"
+            with m.Else():
+                m.next = "B"
+        return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(states), "cannot be in a state with a test")
+
+
+def test_shifter_registers_without_an_operation():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            m.d.sync += sh.osr.eq(5)
+            m.next = "A"
+        return [("A", a)]
+    refuse(data_body(states), "without an operation")
+
+
+def test_fifo_flag_tested_by_hand():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            with m.If(sh.fifo.tx_ready):
+                m.next = "B"
+        return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(states), "belongs to `pull block`")
+
+
+def test_fifo_flag_must_be_true_when_the_instruction_completes():
+    def wrong(m, sh, x, y, out, inp):
+        def a():
+            with m.If(~sh.fifo.tx_ready):
+                with sh.pull(m):
+                    m.next = "B"
+        return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(wrong), "more than one test")
+
+
+def test_push_uses_the_rx_flag_and_pull_the_tx_flag():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            with m.If(sh.fifo.rx_space):
+                with sh.pull(m, block=False):
+                    m.next = "B"
+        return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+    refuse(data_body(states), "belongs to `push block`")
+
+
+def test_side_set_must_agree_while_waiting_and_completing():
+    def body(m, pl):
+        sh = pl.shifter(m)
+        side = pl.buffer(m, "o", "gpio", 3)
+        pl.pio_role(side, "side")
+
+        def a():
+            with sh.pull(m):
+                m.d.sync += side.o.eq(1)          # only when the word arrives: PIO applies side-set in the first cycle of the instruction
+                m.next = "B"
+        fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+    refuse(body, "side-set value differs between waiting and completing")
+
+
+def test_a_blocking_operation_needs_its_helper():
+    def states(m, sh, x, y, out, inp):
+        def a():
+            sh.out(m, "x", 4)
+            m.d.sync += sh.op.eq(3)           # a different operation marker than the statements belong to
+            m.next = "A"
+        return [("A", a)]
+    refuse(data_body(states), "do not match")
+
+
+def test_two_out_pin_groups():
+    def body(m, pl):
+        sh = pl.shifter(m)
+        a_, b_ = pl.buffer(m, "o", "gpio", 0), pl.buffer(m, "o", "gpio", 1)
+
+        def s0():
+            sh.out(m, a_)
+            m.next = "S1"
+
+        def s1():
+            sh.out(m, b_)
+            m.next = "S0"
+        fsm_states(m, [("S0", s0), ("S1", s1)])
+    refuse(body, "more than one pin group")
+
+
+def test_two_in_pin_groups():
+    def body(m, pl):
+        sh = pl.shifter(m)
+        a_, b_ = pl.buffer(m, "i", "gpio", 0), pl.buffer(m, "i", "gpio", 1)
+
+        def s0():
+            sh.in_(m, a_)
+            m.next = "S1"
+
+        def s1():
+            sh.in_(m, b_)
+            m.next = "S0"
+        fsm_states(m, [("S0", s0), ("S1", s1)])
+    refuse(body, "reads 2 different pin groups")
+
+
+def test_helper_misuse_is_an_error_when_the_design_is_written():
+    pl = RP2040PioPlatform()
+    m = Module()
+    m._MustUse__silence = True
+    sh = pl.shifter(m)
+    sh.fifo._MustUse__silence = True
+    for bad in (0, 33, 2.5, "3"):
+        with pytest.raises(ValueError, match="bit count"):
+            sh.out(m, "x", bad)
+    with pytest.raises(ValueError, match="bit count"):
+        sh.in_(m, "null", 0)
+    spare = Module()
+    spare._MustUse__silence = True
+    with pytest.raises(ValueError, match="already called"):
+        pl.shifter(spare)
+    with pytest.raises(ValueError, match="right"):
+        RP2040PioPlatform().shifter(spare, out_shift="up")
+    pin = RP2040PioPlatform()
+    m2 = Module()
+    m2._MustUse__silence = True
+    p = pin.buffer(m2, "i", "gpio", 0)
+    p._MustUse__silence = True
+    s2 = pin.shifter(m2)
+    s2.fifo._MustUse__silence = True
+    with pytest.raises(ValueError, match="bit count"):
+        s2.in_(m2, p, 2)           # a 1-bit input cannot supply two bits
+
+
+def test_the_fifo_model_is_the_only_submodule_allowed():
+    from amaranth.hdl import Module as M
+
+    def body(m, pl):
+        pl.shifter(m)
+        other = M()
+        other._MustUse__silence = True
+        m.submodules.other = other
+        fsm_states(m, [("A", lambda: setattr(m, "next", "A"))])
+    refuse(body, "submodules are not supported")

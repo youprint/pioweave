@@ -58,6 +58,8 @@ class _RPPioPlatform(Platform):
         self.simulation = False      # True: request() returns io.SimulationPort objects, which the Amaranth simulator can drive (pio_project.amaranth_waves)
         self._pio_pins = []
         self._scratch = {}
+        self._shifter = None
+        self.tx_init = []        # words already in the TX FIFO at cycle 0 (the reference simulation sets it; real hardware gets them from the host)
 
     # ---- resources
     def request(self, name, number=0, *, dir="-", xdr=0):
@@ -127,6 +129,11 @@ class _RPPioPlatform(Platform):
         if name not in self._scratch:
             self._scratch[name] = Signal(32, name="pio_" + name)
         return self._scratch[name]
+
+    def shifter(self, m, out_shift="right", in_shift="right"):
+        """The OSR / ISR shifters and the two FIFOs of the state machine (amaranth_rp.data.Shifter); call it once, inside elaborate()."""
+        from .data import Shifter
+        return Shifter(self, m, out_shift, in_shift, self.tx_init)
 
     def create_missing_domain(self, name):
         return ClockDomain(name, reset_less=True)

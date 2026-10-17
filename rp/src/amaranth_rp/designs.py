@@ -192,6 +192,143 @@ class HighPins(Elaboratable):
         return m
 
 
+class UartTx(Elaboratable):
+    """8N1 UART transmitter on GPIO 0, 2 clock cycles per bit: the program of the Pico SDK's uart_tx example written as an FSM. One word from the TX FIFO is one
+    frame (low 8 bits, least significant first). The pin is driven by side-set (idle level and start bit) and by `out pins`."""
+
+    def elaborate(self, platform):
+        m = Module()
+        tx = platform.buffer(m, "o", "gpio", 0)
+        sh = platform.shifter(m, out_shift="right")
+        x = platform.scratch("x")
+        with m.FSM():
+            with m.State("PULL"):
+                m.d.sync += tx.o.eq(1)               # idle level, side-set while waiting for a word
+                with sh.pull(m):
+                    m.next = "PULL_HOLD"
+            with m.State("PULL_HOLD"):                # no effect: the delay of the pull
+                m.next = "START"
+            with m.State("START"):
+                m.d.sync += [tx.o.eq(0), x.eq(7)]     # start bit (side-set) and the bit counter
+                m.next = "BIT"
+            with m.State("BIT"):
+                sh.out(m, tx)                         # out pins, 1
+                m.next = "LOOP"
+            with m.State("LOOP"):
+                m.d.sync += x.eq(x - 1)
+                with m.If(x != 0):
+                    m.next = "BIT"
+                with m.Else():
+                    m.next = "PULL"
+        return m
+
+
+class UartRx(Elaboratable):
+    """8N1 UART receiver on GPIO 4, 8 clock cycles per bit (the Pico SDK's uart_rx example): wait for the start bit, sample the middle of every data bit with
+    `in pins, 1` (shifting right: the byte ends up in bits 31..24 of the word), push the word."""
+
+    def elaborate(self, platform):
+        m = Module()
+        rx = platform.buffer(m, "i", "gpio", 4)
+        sh = platform.shifter(m, in_shift="right")
+        x = platform.scratch("x")
+        with m.FSM():
+            with m.State("WAIT_START"):
+                with m.If(~rx.i):
+                    m.next = "SETX"
+            with m.State("SETX"):
+                m.d.sync += x.eq(7)
+                m.next = "H1"
+            for k in range(1, 11):                    # ten cycles of delay: the next sample is in the middle of the first data bit
+                with m.State("H%d" % k):
+                    m.next = "H%d" % (k + 1) if k < 10 else "BIT"
+            with m.State("BIT"):
+                sh.in_(m, rx)                         # in pins, 1 [6]: the six hold states below are its delay, so a bit lasts 8 cycles
+                m.next = "B1"
+            for k in range(1, 7):
+                with m.State("B%d" % k):
+                    m.next = "B%d" % (k + 1) if k < 6 else "LOOP"
+            with m.State("LOOP"):
+                m.d.sync += x.eq(x - 1)
+                with m.If(x != 0):
+                    m.next = "BIT"
+                with m.Else():
+                    m.next = "PUSH"
+            with m.State("PUSH"):
+                with sh.push(m):
+                    m.next = "WAIT_START"
+        return m
+
+
+class ByteSwap(Elaboratable):
+    """Pulls a word, splits two bytes into X and Y with `out x, 8` / `out y, 8` (shifting left: the most significant byte first), and pushes them in the other
+    order with `in y, 8` / `in x, 8` (shifting left), after 16 zero bits from `in null, 16`: one word in, one word out."""
+
+    def elaborate(self, platform):
+        m = Module()
+        sh = platform.shifter(m, out_shift="left", in_shift="left")
+        with m.FSM():
+            with m.State("PULL"):
+                with sh.pull(m):
+                    m.next = "GET_X"
+            with m.State("GET_X"):
+                sh.out(m, "x", 8)
+                m.next = "GET_Y"
+            with m.State("GET_Y"):
+                sh.out(m, "y", 8)
+                m.next = "ZEROS"
+            with m.State("ZEROS"):
+                sh.in_(m, "null", 16)
+                m.next = "PUT_Y"
+            with m.State("PUT_Y"):
+                sh.in_(m, "y", 8)
+                m.next = "PUT_X"
+            with m.State("PUT_X"):
+                sh.in_(m, "x", 8)
+                m.next = "PUSH"
+            with m.State("PUSH"):
+                with sh.push(m):
+                    m.next = "PULL"
+        return m
+
+
+class NoBlockEcho(Elaboratable):
+    """`pull noblock` and `push noblock`: X holds 21; each round loads the OSR from the TX FIFO, or from X when the FIFO is empty, and sends it on. With a drained
+    RX FIFO nothing is lost; without draining, the fifth word is dropped (the ISR is cleared either way)."""
+
+    def elaborate(self, platform):
+        m = Module()
+        sh = platform.shifter(m)
+        with m.FSM():
+            with m.State("INIT"):
+                m.d.sync += platform.scratch("x").eq(21)
+                m.next = "PULL"
+            with m.State("PULL"):
+                with sh.pull(m, block=False):
+                    m.next = "MOVE"
+            with m.State("MOVE"):                     # no effect: lets the pull settle before the OSR is read
+                m.next = "OUT"
+            with m.State("OUT"):
+                sh.out(m, "y", 32)
+                m.next = "IN"
+            with m.State("IN"):
+                sh.in_(m, "y", 32)
+                m.next = "PUSH"
+            with m.State("PUSH"):
+                with sh.push(m, block=False):
+                    m.next = "PULL"
+        return m
+
+
+def _uart_frames(bytes_, cycles_per_bit=8, idle=6):
+    """A serial line carrying `bytes_` as 8N1 frames, least significant bit first, high when idle."""
+    bits = "1" * idle
+    for b in bytes_:
+        bits_ = "0" + "".join(str((b >> k) & 1) for k in range(8)) + "1"
+        bits += "".join(c * cycles_per_bit for c in bits_) + "1" * 4
+    return bits
+
+
 PROGRAMS = {
     "square_wave": (SquareWave, "rp2040", {}, 24),
     "pulse_train": (PulseTrain, "rp2040", {}, 60),
@@ -199,4 +336,15 @@ PROGRAMS = {
     "clocked_bits": (ClockedBits, "rp2040", {}, 30),
     "pin_branch": (PinBranch, "rp2350", {4: "0000000000000000000011111111111111111111"}, 60),
     "high_pins": (HighPins, "rp2350b", {44: "000011110000011111000000111100"}, 50),
+    # with a data path: the options give the words in the TX FIFO at cycle 0, words the host writes later, and whether the host empties the RX FIFO
+    "uart_tx": (UartTx, "rp2040", {}, 60, {"tx": [0x55, 0xC3]}),
+    "uart_rx": (UartRx, "rp2040", {4: _uart_frames([0x5A, 0xC3])}, 230),
+    "byte_swap": (ByteSwap, "rp2350", {}, 40, {"tx": [0x11223344], "tx_feed": [(14, 0xAABBCCDD)]}),
+    "noblock_echo": (NoBlockEcho, "rp2040", {}, 40, {"tx": [7, 9]}),
 }
+
+
+def entry(name):
+    """(design class, chip, stimulus, cycles, options) of an example; options: tx, tx_feed, drain."""
+    e = PROGRAMS[name]
+    return (e + ({},))[:5] if len(e) == 4 else e

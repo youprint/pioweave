@@ -19,7 +19,7 @@ from .platform import PLATFORMS
 
 def _resolve(a):
     if a.design in designs.PROGRAMS:
-        cls, chip, stim, cycles = designs.PROGRAMS[a.design]
+        cls, chip, stim, cycles, opts = designs.entry(a.design)
         name = a.name or a.design
     else:
         if ":" not in a.design:
@@ -27,15 +27,23 @@ def _resolve(a):
         mod, _, attr = a.design.partition(":")
         sys.path.insert(0, os.getcwd())
         cls = getattr(importlib.import_module(mod), attr)
-        chip, stim, cycles = None, {}, 64
+        chip, stim, cycles, opts = None, {}, 64, {}
         name = a.name or attr.lower()
     chip = a.chip or chip
     if chip not in PLATFORMS:
         raise SystemExit("give --chip (%s)" % ", ".join(sorted(PLATFORMS)))
+    stim = dict(stim)
     for item in a.stim or []:
         g, _, w = item.partition("=")
         stim[int(g)] = w
-    return cls, chip, stim, a.cycles or cycles, name
+    opts = dict(opts)
+    if a.tx:
+        opts["tx"] = [int(w, 0) for w in a.tx.split(",")]
+    if a.tx_feed:
+        opts["tx_feed"] = [(int(c), int(w, 0)) for c, _, w in (item.partition("=") for item in a.tx_feed)]
+    if a.no_drain:
+        opts["drain"] = False
+    return cls, chip, stim, a.cycles or cycles, name, opts
 
 
 def main(argv=None):
@@ -50,16 +58,19 @@ def main(argv=None):
     b.add_argument("--clock-hz", type=int, default=None, help="state machine clock the C / MicroPython project asks for")
     b.add_argument("--cycles", type=int, default=None, help="length of the reference simulation")
     b.add_argument("--stim", action="append", help="input waveform GPIO=0101...")
+    b.add_argument("--tx", help="words in the TX FIFO at cycle 0, comma separated (decimal or 0x...)")
+    b.add_argument("--tx-feed", action="append", help="CYCLE=WORD: a word the host writes into the TX FIFO so that the instruction of that cycle sees it")
+    b.add_argument("--no-drain", action="store_true", help="the host does not empty the RX FIFO (it can fill up)")
     b.add_argument("--name")
     a = ap.parse_args(argv)
     if a.cmd == "list":
         print("\n".join("%s (%s)" % (k, v[1]) for k, v in sorted(designs.PROGRAMS.items())))
         return 0
-    cls, chip, stim, cycles, name = _resolve(a)
+    cls, chip, stim, cycles, name, opts = _resolve(a)
     factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=a.clock_hz))  # noqa: E731
     design, platform = factory()
     out = os.path.join(a.outdir, "project")
-    platform.build(design, name, out, project=a.project, factory=factory, cycles=cycles, stim=stim)
+    platform.build(design, name, out, project=a.project, factory=factory, cycles=cycles, stim=stim, **opts)
     print("EMIT " + json.dumps({"path": os.path.join(out, name + ".pio")}))
     return 0
 

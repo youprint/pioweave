@@ -26,11 +26,11 @@ TOOLCHAIN = os.path.join(BITWEAVE_REPO, ".tools", "arm", "usr", "bin")
 
 
 def build(tmp_path, example, kind, hz=None, with_factory=True):
-    cls, chip, stim, cycles = pio_designs.PROGRAMS[example]
+    cls, chip, stim, cycles, opts = pio_designs.entry(example)
     factory = lambda: (cls(), PLATFORMS[chip](sm_clock_hz=hz))  # noqa: E731
     design, pl = factory()
     out = tmp_path / kind
-    kw = dict(project=kind, cycles=cycles, stim=stim)
+    kw = dict(project=kind, cycles=cycles, stim=stim, **opts)
     if with_factory:
         kw["factory"] = factory
     pl.build(design, example, str(out), **kw)
@@ -116,7 +116,7 @@ def test_micropython_needs_pioasm(tmp_path, monkeypatch):
 def test_unknown_kind_and_no_loading(tmp_path):
     with pytest.raises(PioProjectError, match="project must be"):
         build(tmp_path, "square_wave", "vhdl")
-    cls, chip, stim, cycles = pio_designs.PROGRAMS["square_wave"]
+    cls, chip, stim, cycles, opts = pio_designs.entry("square_wave")
     pl = PLATFORMS[chip]()
     never_elaborated = cls()
     never_elaborated._MustUse__silence = True     # build() refuses before it elaborates the design

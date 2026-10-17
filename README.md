@@ -29,8 +29,10 @@ another version is refused by pip (package metadata) and by the version gate (sh
 ## Verification (2026-10-17)
 
 - the builder's encoder equals the real `pioasm` on 10,681 instruction words in 351 programs;
-- Amaranth designs: six examples, directed forms and 450 random FSM designs (RP2040, RP2350, RP2350A/B, RP2354B, GPIO base 0 and 16) agree with the bitweave PIO simulator pin by
-  pin and cycle by cycle; 36 designs outside the subset are refused with a reason;
+- Amaranth designs: ten examples, directed forms and 450 random FSM designs (RP2040, RP2350, RP2350A/B, RP2354B, GPIO base 0 and 16) agree with the bitweave PIO simulator pin by
+  pin and cycle by cycle; designs outside the subset are refused with a reason (25 refusal tests);
+- the data path (FIFOs, OSR, ISR: `pull`, `push`, `out`, `in`; UART transmitter and receiver, byte swap, non-blocking echo): 250 random designs agree with the simulator on pins, words pushed with
+  their cycles and FIFO contents; not built yet: autopull/autopush, `mov` with OSR/ISR, `irq`, joined FIFOs (see `docs/amaranth-pio.md` section 2a);
 - the generated bitweave cases pass; three generated Pico SDK C projects (RP2040, RP2350, RP2350B with GPIO base 16) build to a UF2 with the real SDK.
 
 Not verified: any run on a chip; the MicroPython output (rp2 API names from the documentation); Amaranth versions other than 0.5.10; PyPI publication (not planned, licence is proprietary).
