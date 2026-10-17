@@ -43,7 +43,8 @@ jobs:
         run: |
           pip install --no-deps -e .
       - name: Run the tests that need no other tool
-        # the co-simulation against bitweave's PIO simulator and the firmware builds are skipped here: they need the bitweave binary, pioasm and the Pico SDK
+        # the co-simulation against bitweave's PIO simulator and the firmware builds are SKIPPED here, not run (about a third of the tests): they need the bitweave binary, pioasm and the Pico SDK, which
+        # the runner does not have; a release needs the full run with the tools (docs/releasing.rst)
         # (the git version of Amaranth is not one the version gate accepts unless it is the tested commit, hence the override)
         env:
           PIOWEAVE_ALLOW_UNTESTED: ${{ matrix.amaranth-version == 'git' && '1' || '0' }}
@@ -72,3 +73,13 @@ jobs:
       - name: Run the doctests in the docstrings
         run: |
           sphinx-build -W -b doctest docs docs/_build/doctest
+
+  required:
+    # one status for branch protection that is red when any job of the matrix or the documentation job failed or was skipped (as in amaranth-soc)
+    runs-on: ubuntu-latest
+    needs: [test, document]
+    if: always()
+    steps:
+      - name: Check the results of the jobs
+        run: |
+          [ "${{ needs.test.result }}" = "success" ] && [ "${{ needs.document.result }}" = "success" ]
