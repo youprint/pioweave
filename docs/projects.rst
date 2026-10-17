@@ -78,6 +78,8 @@ The command line
    python -m pioweave list                                          # the example designs and their chips
    python -m pioweave doctor [--strict]                             # check this environment
    python -m pioweave build DESIGN OUTDIR [options]
+   python -m pioweave emulate DESIGN [options]                      # run a design in the emulator (see the emulator page)
+   python -m pioweave new NAME [--template T] / new --list          # scaffold a project (see getting started)
 
 ``DESIGN`` is an example name or ``module:Class`` of your own ``PioDesign`` / ``Elaboratable`` (found through the current directory). It writes the project to ``OUTDIR/project`` and prints ``EMIT {"path": ".../NAME.pio"}``, which is what a bitweave ``generator = [...]`` expects. Options:
 

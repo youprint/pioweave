@@ -727,7 +727,7 @@ class StateMachine:
 
     def _step(self, view, ctx):
         """One state machine clock cycle."""
-        c, blk = self.cfg, self.block
+        blk = self.block
         if self.cur_forced is not None:                                    # a latched instruction: a forced one that stalled, or the executee of OUT / MOV EXEC
             word, source = self.cur_forced, self.cur_source
             self.cur_forced = None

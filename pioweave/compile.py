@@ -579,7 +579,6 @@ def _split_effects(effects, ctx, loc):
         name = ctx.regname(sig)
         if name is None:
             _fail("signal %r is not a pin from platform.request() or a scratch register from platform.scratch(); it would need PIO storage that does not exist" % sig.name, loc)
-        other = "y" if name == "x" else "x"
         v = _const(rhs, loc)
         if v is not None:
             if not 0 <= v <= 31:
@@ -1048,7 +1047,6 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
             _fail("a state that waits for a pin must continue with the next state", br.loc)
         if treg or ereg:
             _fail("a waiting state cannot change registers", br.loc)
-        gpio = cond[1]
         info = ctx.platform.pin_info(cond[1])
         if len(info.gpios) != 1:
             _fail("wait on a multi-bit input is not supported", br.loc)
@@ -1057,9 +1055,9 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
         return Op("wait", level=int(level), gpio=info.gpios[0], side=side, targets=[], foldable=True, pure_nop=False)
     # jump on a test
     if tn != succ and en == succ:
-        jump_when, target, other = cond, tn, en
+        jump_when, target = cond, tn
     elif en != succ and tn == succ:
-        jump_when, target, other = _flip(cond), en, tn
+        jump_when, target = _flip(cond), en
     else:
         _fail("a state with a test must continue with the next state on one branch and jump on the other (found branches to %s and %s)" % (names[tn], names[en]), br.loc)
     if treg != ereg:

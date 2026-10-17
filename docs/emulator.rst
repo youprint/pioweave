@@ -57,7 +57,7 @@ One ``PioBlock`` has a shared 32-word instruction memory, four state machines, t
    * - errors
      - reserved encodings, version-1 instructions on version 0, undefined combinations (for example ``PUSH`` with an RX FIFO register join) and executing empty instruction memory raise ``EmulationError``
 
-Not modelled: DMA and its request signals, the CPU-side interrupt lines (the IRQ flags are visible, the NVIC is not), GPIO function selection and pad electrical behaviour (input hysteresis, slew, pulls), the system clock itself (a cycle is a system clock cycle), and more than one clock domain.
+Not modelled: the FIFO debug flags (FDEBUG: RXSTALL, which a ``push noblock`` on a full RX FIFO sets, TXSTALL, RXUNDER, TXOVER), the ``EXECCTRL_EXEC_STALLED`` flag and the ``SMx_ADDR`` register (the program counter is visible as ``sm.pc``), DMA and its request signals, the CPU-side interrupt lines (the IRQ flags are visible, the NVIC is not), GPIO function selection and pad electrical behaviour (input hysteresis, slew, pulls), the system clock itself (a cycle is a system clock cycle), and more than one clock domain.
 
 Using a block directly
 ----------------------

@@ -113,6 +113,8 @@ Then bitweave runs the compiled program in its own PIO simulator and compares:
    cd build/blink
    bitweave --config bitweave.toml pio blink        # needs pioasm; [pass] pio:blink  sim:amaranth_reference
 
+Without ``pioasm`` on the ``PATH`` bitweave prints ``[skip] ... not found: pioasm``. Put its directory on the ``PATH`` for the call (``PATH=/path/to/pioasm-dir:$PATH bitweave ...``) or add it to the ``bitweave.toml`` that ``build()`` wrote: ``[tools]`` ``bin_dirs = ["/path/to/pioasm-dir"]`` (the key is described in bitweave's guide; ``.bitweave-tools/bin`` next to the config is searched by default).
+
 A pass means the program generated from your FSM behaves, cycle for cycle, like your FSM did in the Amaranth simulation. It says nothing about a chip: PIO timing on hardware also depends on the state machine clock and on the pad (see :doc:`testing <testing>`).
 
 Other project kinds

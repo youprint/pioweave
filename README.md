@@ -112,7 +112,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 
 ## Layout
 
-    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), compile, data, designs, platform, project, scaffold, doctor, _compat
+    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), block, block_cli, block_designs, compile, data, designs, platform, project, scaffold, doctor, __main__ (the command line), _compat
     pioweave/builder/      the Python builder (needs no Amaranth)
     pioweave/emulator/     the PIO emulator (needs no Amaranth)
     pioweave/boards/       board definitions
