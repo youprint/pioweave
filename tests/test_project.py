@@ -443,3 +443,17 @@ class ChipStartStateTests(support.TestCase):
         self.assertIn("pio_set_input_sync_bypass_with_mask64(pio, 0x10000000000ull, 0x10000000000ull);", _c_sync_bypass([high])[1])      # bit 40
         none = SimpleNamespace(input_gpios=[], dynamic_gpios=[], jmp_gpio=None)
         self.assertEqual(_c_sync_bypass([none]), [])
+
+
+class FeedTests(support.TestCase):
+    def test_two_feeds_in_one_cycle_are_refused(self):
+        # COR-07: the reference applies one TX word per cycle (the FIFO model takes one push per clock), so a second word in the same cycle would be dropped silently
+        with self.assertRaisesRegex(PioProjectError, "two words in cycle 3"):
+            SimOptions(tx_feed=[(3, 0xAA), (3, 0xBB), (10, 0xCC)])
+        SimOptions(tx_feed=[(3, 0xAA), (4, 0xBB)])                     # one per cycle is fine
+
+    def test_two_feeds_in_one_cycle_to_one_machine_of_a_block_are_refused(self):
+        from pioweave.block import BlockError, BlockSim
+        with self.assertRaisesRegex(BlockError, "machine tx.*two words in cycle 3"):
+            BlockSim(tx_feed={"tx": [(3, 1), (3, 2)]})
+        BlockSim(tx_feed={"a": [(3, 1)], "b": [(3, 2)]})              # different machines have FIFOs of their own

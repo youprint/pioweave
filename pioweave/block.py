@@ -187,6 +187,13 @@ class BlockSim:
     irq_set: tuple = ()
     irq_clear: tuple = ()
 
+    def __post_init__(self):
+        for name, feed in self.tx_feed.items():
+            cycles = [c for c, _ in feed]
+            for c in cycles:
+                if cycles.count(c) > 1:
+                    raise BlockError("tx_feed of machine %s has two words in cycle %d; the reference simulation applies one host write per cycle\n  hint: move one of the words to another cycle" % (name, c))
+
 
 def _decode_writes(word, cfg, prog, dirs=False):
     """The window pins an instruction writes: the levels (``dirs=False``: ``set pins`` the SET group, ``out pins`` / ``mov pins`` the OUT group, and the side-set field when

@@ -50,7 +50,7 @@ class SimOptions:
     tx : tuple of int
         Words in the TX FIFO at cycle 0.
     tx_feed : tuple of tuple
-        ``(cycle, word)`` pairs written by the host.
+        ``(cycle, word)`` pairs written by the host, at most one word per cycle (a second word in the same cycle is refused with `PioProjectError`).
     drain : bool
         The host empties the RX FIFO every cycle.
     irq_set, irq_clear : tuple of tuple
@@ -64,6 +64,12 @@ class SimOptions:
     drain: bool = True
     irq_set: tuple = ()
     irq_clear: tuple = ()
+
+    def __post_init__(self):
+        cycles = [c for c, _ in self.tx_feed]
+        for c in cycles:
+            if cycles.count(c) > 1:
+                raise PioProjectError("tx_feed has two words in cycle %d; the reference simulation applies one host write per cycle (the emulator and bitweave would apply both and the golden receive list would differ)\n  hint: move one of the words to another cycle" % c)
 
 
 class PioProjectError(Exception):
