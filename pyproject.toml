@@ -53,14 +53,13 @@ test = [
 ]
 docs = [
   "sphinx>=7",
-  "myst-parser",
   "sphinx-rtd-theme",
 ]
 
 [tool.pdm.scripts]
 test.cmd = "python -m unittest discover -t . -s tests -v"
 test.env = {PYTHONWARNINGS = "error"}
-test-quick.cmd = "python -m unittest tests.test_refusals tests.test_program tests.test_boards tests.test_docs"
+test-quick.cmd = "python -m unittest tests.test_refusals tests.test_program tests.test_boards"
 test-quick.env = {PYTHONWARNINGS = "error"}
 document.cmd = "sphinx-build docs docs/_build"
 test-docs.cmd = "sphinx-build -W -b doctest docs docs/_build/doctest"

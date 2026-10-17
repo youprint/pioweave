@@ -80,7 +80,7 @@ pioweave is a normal Python package for an environment that has Amaranth:
     pip install -e .                                              # from a checkout, for development
 
 `pip` pulls in `amaranth>=0.5,<0.6`. Then `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list` shows the example designs.
-With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.md](docs/getting-started.md)).
+With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.rst](docs/getting-started.rst)).
 
 The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `pioweave` (platforms, compiler, project writers), `pioweave.builder` (the Python builder, needs no Amaranth), `pioweave.emulator`
 (the PIO emulator, needs no Amaranth) and `pioweave.boards` (board definitions).
@@ -89,16 +89,16 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 
 | | |
 |---|---|
-| [docs/getting-started.md](docs/getting-started.md) | install, first design, build, check it with bitweave |
-| [docs/designing-for-pio.md](docs/designing-for-pio.md) | the Amaranth style that compiles to PIO: what maps to which instruction, delays, side-set, pins, what is refused |
-| [docs/data-path.md](docs/data-path.md) | FIFOs, OSR and ISR: `pull`, `push`, `out`, `in` |
-| [docs/builder.md](docs/builder.md) | the Python builder (`pioweave.builder`) |
-| [docs/emulator.md](docs/emulator.md) | the PIO emulator: what is modelled, how to use it, how it was checked |
-| [docs/boards.md](docs/boards.md) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
-| [docs/projects.md](docs/projects.md) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
-| [docs/compatibility.md](docs/compatibility.md) | supported Amaranth versions, the version gate, the test matrix |
-| [docs/testing.md](docs/testing.md) | running the tests, co-simulation, environment variables |
-| [docs/design-notes/](docs/design-notes/) | the design notes the code was written from |
+| [docs/getting-started.rst](docs/getting-started.rst) | install, first design, build, check it with bitweave |
+| [docs/designing-for-pio.rst](docs/designing-for-pio.rst) | the Amaranth style that compiles to PIO: what maps to which instruction, delays, side-set, pins, what is refused |
+| [docs/data-path.rst](docs/data-path.rst) | FIFOs, OSR and ISR: `pull`, `push`, `out`, `in` |
+| [docs/builder.rst](docs/builder.rst) | the Python builder (`pioweave.builder`) |
+| [docs/emulator.rst](docs/emulator.rst) | the PIO emulator: what is modelled, how to use it, how it was checked |
+| [docs/boards.rst](docs/boards.rst) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
+| [docs/projects.rst](docs/projects.rst) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
+| [docs/compatibility.rst](docs/compatibility.rst) | supported Amaranth versions, the version gate, the test matrix |
+| [docs/testing.rst](docs/testing.rst) | running the tests, co-simulation, environment variables |
+| [docs/design-notes/](docs/design-notes/README.rst) | the design notes the code was written from |
 
 ## Layout
 
@@ -107,7 +107,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
     pioweave/emulator/     the PIO emulator (needs no Amaranth)
     pioweave/boards/       board definitions
     tests/                 the tests (unittest); tests/__init__.py makes it a package
-    docs/                  the documentation (Sphinx with Markdown: `sphinx-build docs docs/_build`)
+    docs/                  the documentation (Sphinx with reStructuredText, examples run by `sphinx-build -b doctest`: `sphinx-build docs docs/_build`)
     scripts/matrix.sh      the Amaranth version matrix
     .github/workflows/     CI
 

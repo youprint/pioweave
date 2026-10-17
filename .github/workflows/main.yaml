@@ -65,7 +65,7 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          pip install 'amaranth>=0.5,<0.6' sphinx myst-parser sphinx-rtd-theme
+          pip install 'amaranth>=0.5,<0.6' sphinx sphinx-rtd-theme
           pip install --no-deps -e .
       - name: Build the documentation
         run: |

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Compile an Amaranth FSM to a PIO program (design note docs/amaranth-pio.md).
+"""Compile an Amaranth FSM to a PIO program (design note docs/design-notes/amaranth-pio.rst).
 
 A PIO state machine is an FSM whose state is the program counter and that executes one instruction per clock cycle. A design written as one
 Amaranth FSM in which every state does what one PIO instruction does is therefore cycle-equivalent to the compiled program, and the Amaranth

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""The only place that touches Amaranth's internals, and the version gate (study: docs/amaranth-ir-study.md).
+"""The only place that touches Amaranth's internals, and the version gate (study: docs/design-notes/amaranth-ir-study.rst).
 
 What the compiler needs from Amaranth, and where it comes from:
   Fragment                          `amaranth.hdl` (exported; its attributes `statements` and `subfragments` are not documented)

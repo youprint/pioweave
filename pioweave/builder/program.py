@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (design note docs/pio-dsl.md).
+"""Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (design note docs/design-notes/pio-dsl.rst).
 
 A `Program` is built with one method per PIO instruction, in the style of an Amaranth description: statements in program order, names as
 constants, errors raised when the program is built, not when the chip runs it. It produces::

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""The data path of a PIO state machine for designs written in Amaranth: the TX and RX FIFOs and the OSR / ISR shifters (design note docs/amaranth-pio.md).
+"""The data path of a PIO state machine for designs written in Amaranth: the TX and RX FIFOs and the OSR / ISR shifters (design note docs/design-notes/amaranth-pio.rst).
 
 `platform.shifter(m)` returns a `Shifter`. Its methods add to the current FSM state exactly the register updates that one PIO instruction does, so the Amaranth
 simulation of the design is the reference for the compiled program::

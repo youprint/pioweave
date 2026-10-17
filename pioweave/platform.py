@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 (A, B) and RP2354 (A, B) (design note docs/amaranth-pio.md).
+"""Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 (A, B) and RP2354 (A, B) (design note docs/design-notes/amaranth-pio.rst).
 
 Amaranth has one platform module per target (amaranth.build.Platform; the vendor modules are in amaranth.vendor). This is the one for the
 PIO blocks of the RP chips. A design is an ordinary Amaranth Elaboratable written in a restricted style (one FSM; one FSM state is one PIO
