@@ -21,7 +21,6 @@ The FIFOs are a model (`FifoModel`, a submodule) that is driven by registers of 
 combinational logic and a pull / push takes effect in the same cycle for the next instruction. The compiler reads the helper statements through two marker
 registers (`op`, `arg`) and checks that the statements of a state on the shifter registers are exactly those of the one operation the marker names.
 """
-import contextlib
 import os
 import sys
 

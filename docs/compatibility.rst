@@ -33,11 +33,11 @@ Supported versions
    * - Amaranth
      - Status (2026-10-17)
    * - 0.5.1, 0.5.10
-     - the whole test suite passes (166 tests, with real Pico SDK builds)
+     - 0.5.10: the whole test suite passes (547 tests with ``PIO_COSIM_N=60``, with real Pico SDK builds); 0.5.1: the default run passes (367 tests, without the SDK builds)
    * - 0.5.0, 0.5.2 to 0.5.9
-     - the quick suite passes (106 tests plus the instruction words of all fifteen example designs)
+     - the quick suite passes (106 tests plus the instruction words of all fifteen example designs; rerun on 0.5.0; 0.5.2 to 0.5.9 were last run before the autopull, IRQ and ``wait pin`` support)
    * - 0.6.0.dev140 (GitHub main, commit ``90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7``)
-     - the whole suite passes
+     - the default run passes (367 tests, without the SDK builds)
    * - any other version
      - refused (see below)
 
