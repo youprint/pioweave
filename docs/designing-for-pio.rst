@@ -82,7 +82,7 @@ Each of these raises ``PioCompileError`` naming the Amaranth source line:
 - more than one IN group (``in pins``, ``mov ..., pins`` and ``wait pin`` must name the same one), more than one OUT group;
 - two ``set`` groups or two side-set groups; pin groups that are not consecutive GPIOs; other clock domains; more than 32 instructions.
 
-Not built yet in the Amaranth front end (the three destinations ``pindirs``, ``pc`` and ``exec`` of ``out`` and ``mov`` are refused on purpose, see the data path page): ``irq`` with ``prev`` / ``next`` (other PIO blocks), the RP2350 joins that turn the RX FIFO into registers, several state machines. The Python :doc:`builder <builder>` has every instruction.
+Not built yet in the Amaranth front end (the three destinations ``pindirs``, ``pc`` and ``exec`` of ``out`` and ``mov`` are refused on purpose, see the data path page): ``irq`` with ``prev`` / ``next`` (other PIO blocks), the RP2350 joins that turn the RX FIFO into registers. Several state machines in one design are supported by :doc:`blocks <blocks>`. The Python :doc:`builder <builder>` has every instruction.
 
 Timing between the two simulators
 ---------------------------------

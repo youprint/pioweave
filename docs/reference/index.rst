@@ -11,6 +11,7 @@ docstrings are run by ``sphinx-build -b doctest``. The manuals in the other page
    compiler
    data
    project
+   block
    emulator
    boards
    compat

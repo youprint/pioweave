@@ -10,11 +10,11 @@ order they are listed::
 
 What is shared and how the reference simulation models it:
 
-  IRQ flags   one set of eight flags; the machines change them through toggle registers like a single machine does (`IrqHub`, `IrqPort`). A flag that one machine sets and
-              another clears in the same cycle ends up set (RP2040 datasheet 3.4.9, RP2350 datasheet 11.2.7). All machines see the flags as they were after the previous cycle.
-  pins        one pad per GPIO. A GPIO that several machines write in the same cycle gets the level of the highest-numbered state machine (RP2040 datasheet 3.5.6.1, RP2350 datasheet
-              11.5.6.1); a GPIO nobody writes in a cycle keeps its level. A machine that reads a GPIO that another machine drives sees the level written in the previous cycle.
-  memory      the programs are placed one after the other from address 0 in machine order (`BlockCompiled.offsets`); at most 32 instructions in all.
+- **IRQ flags**: one set of eight flags; the machines change them through toggle registers like a single machine does (`IrqHub`, `IrqPort`). A flag that one machine sets and
+  another clears in the same cycle ends up set (RP2040 datasheet 3.4.9, RP2350 datasheet 11.2.7). All machines see the flags as they were after the previous cycle.
+- **pins**: one pad per GPIO. A GPIO that several machines write in the same cycle gets the level of the highest-numbered state machine (RP2040 datasheet 3.5.6.1, RP2350 datasheet
+  11.5.6.1); a GPIO nobody writes in a cycle keeps its level. A machine that reads a GPIO that another machine drives sees the level written in the previous cycle.
+- **memory**: the programs are placed one after the other from address 0 in machine order (`BlockCompiled.offsets`); at most 32 instructions in all.
 
 Nothing generated here has run on a chip.
 """

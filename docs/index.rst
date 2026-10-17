@@ -11,6 +11,7 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    examples
    designing-for-pio
    data-path
+   blocks
    builder
    emulator
    hardware-testing

@@ -32,6 +32,9 @@ What the tests prove
    * - ``tests/test_project.py``
      - the generated files, that the generated bitweave cases pass in bitweave, that the generated C projects (eight examples and a PIO version 1 design with ``STATUS_IRQ_SET`` and the IN pin count) build to a UF2 with the real Pico SDK, the deprecated ``build()`` keywords, the ``PioDesign`` base class
      - bitweave, ``pioasm``; the SDK build needs ``PIO_BUILD_FIRMWARE=1``
+   * - ``tests/test_block.py``, ``tests/test_block_cosim.py``
+     - blocks with several state machines (:doc:`blocks`): the four example blocks and random blocks of two to four machines (shared IRQ flags and pins) run in the Amaranth simulation of the whole block and in the emulator and must agree cycle by cycle (pads, what the machines read, IRQ flags, words received, FIFO contents); each machine alone in the emulator with the derived environment must repeat the block; the shared-flag and pin-priority semantics; the project files; the command line; the generated one-machine cases in bitweave (and the SDK build with ``PIO_BUILD_FIRMWARE=1``); the refusals are in ``tests/test_refusals.py``
+     - the bitweave cases need ``bitweave`` and ``pioasm``; the rest nothing
    * - ``tests/test_boards.py``
      - the board pins against the Pico SDK headers and a blink design compiled on each board
      - an SDK checkout for the header comparison

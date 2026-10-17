@@ -7,7 +7,8 @@
   pioweave.boards    board definitions with named pins: Raspberry Pi Pico, Pico 2, WeAct Studio RP2350B core, Waveshare Core2350B
 
 A design is an Amaranth module written in a restricted style (one FSM, one state = one PIO instruction); `platform.build(design, name, dir,
-project="pio" | "pico-c" | "micropython")` compiles it to PIO instructions and writes the project. Nothing has run on a chip. See the README and docs/.
+project="pio" | "pico-c" | "micropython")` compiles it to PIO instructions and writes the project. Several such designs can run as the state machines of one block
+(`Block`, `Machine`, `BlockSim`, pioweave.block). Nothing has run on a chip. See the README and docs/.
 
 The public names load on first use (PEP 562, as amaranth.vendor does), so `import pioweave.builder` does not import Amaranth.
 """
@@ -26,6 +27,7 @@ _NAMES = {
     "PLATFORMS": "platform", "RP2040PioPlatform": "platform", "RP2350PioPlatform": "platform", "RP2350APioPlatform": "platform", "RP2350BPioPlatform": "platform",
     "RP2354PioPlatform": "platform", "RP2354APioPlatform": "platform", "RP2354BPioPlatform": "platform",
     "PioDesign": "designs",
+    "Block": "block", "BlockError": "block", "BlockSim": "block", "Machine": "block",
     "PioProjectError": "project", "SimOptions": "project", "amaranth_run": "project", "amaranth_waves": "project", "find_pioasm": "project", "write_project": "project",
 }
 

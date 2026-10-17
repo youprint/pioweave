@@ -9,8 +9,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
+from pioweave.block import Block, BlockError, BlockSim, Machine, block_run, emulate_block  # noqa: E402
 from pioweave.compile import PioCompileError, compile_design  # noqa: E402
-from pioweave.platform import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
+from pioweave.platform import RP2040PioPlatform, RP2350BPioPlatform, RP2350PioPlatform  # noqa: E402
 
 from . import support  # noqa: E402
 
@@ -1039,3 +1040,128 @@ class WaitPinAndJoinRefusalTests(RefusalCase):
         for bad in ("both", "txrx", None, 4):
             with self.assertRaisesRegex(ValueError, "fifo_join is"):
                 RP2040PioPlatform().shifter(spare_module(), fifo_join=bad)
+
+
+# ----------------------------------------------------------------------------- blocks with several state machines (pioweave/block.py)
+class _Long(Elaboratable):
+    """A design of `n` states that each load X with a different value, so none is folded into a delay: `n` instructions."""
+
+    def __init__(self, n=2, gpio=0):
+        self._MustUse__silence = True
+        self.n, self.gpio = n, gpio
+
+    def elaborate(self, platform):
+        m = Module()
+        pin = platform.buffer(m, "o", "gpio", self.gpio)
+        x = platform.scratch("x")
+
+        def state(i):
+            def f():
+                m.d.sync += x.eq(i % 7) if i else pin.o.eq(1)
+                m.next = "S%d" % ((i + 1) % self.n)
+            return f
+        fsm_states(m, [("S%d" % i, state(i)) for i in range(self.n)])
+        return m
+
+
+class _Rel(Elaboratable):
+    def __init__(self):
+        self._MustUse__silence = True
+
+    def elaborate(self, platform):
+        m = Module()
+        sh = platform.shifter(m)
+        fsm_states(m, [("A", lambda: (sh.irq(m, 1, "set", rel=True), setattr(m, "next", "A")))])
+        return m
+
+
+class _TwoOps(Elaboratable):
+    def __init__(self):
+        self._MustUse__silence = True
+
+    def elaborate(self, platform):
+        m = Module()
+        x, y = platform.scratch("x"), platform.scratch("y")
+        fsm_states(m, [("A", lambda: (m.d.sync.__iadd__([x.eq(1), y.eq(2)]), setattr(m, "next", "A")))])
+        return m
+
+
+class BlockRefusalTests(support.TestCase):
+    def refuse(self, block, match):
+        with self.assertRaisesRegex(BlockError, match):
+            block.compile()
+
+    def test_more_than_four_machines(self):
+        with self.assertRaisesRegex(BlockError, "has 4 state machines; 5 were given"):
+            Block([Machine("m%d" % k, lambda k=k: _Long(2, k)) for k in range(5)])
+
+    def test_no_machine_at_all(self):
+        with self.assertRaisesRegex(BlockError, "at least one state machine"):
+            Block([])
+
+    def test_machine_names_must_be_different_identifiers(self):
+        with self.assertRaisesRegex(BlockError, "must be different.*a"):
+            Block([Machine("a", _Long), Machine("b", _Long), Machine("a", _Long)])
+        for bad in ("", "1a", "a-b", "a b", 3):
+            with self.assertRaisesRegex(BlockError, "C identifier"):
+                Machine(bad, _Long)
+
+    def test_a_design_instance_is_refused_because_it_is_elaborated_more_than_once(self):
+        with self.assertRaisesRegex(BlockError, "not an instance"):
+            Machine("a", _Long(2))
+
+    def test_only_machines_are_accepted(self):
+        with self.assertRaisesRegex(BlockError, "Machine"):
+            Block([("a", _Long)])
+
+    def test_the_programs_together_must_fit_the_32_word_memory(self):
+        block = Block([Machine("a", lambda: _Long(12)), Machine("b", lambda: _Long(12, 1)), Machine("c", lambda: _Long(12, 2))])
+        self.refuse(block, r"36 instructions together \(a 12, b 12, c 12\) but the instruction memory of a PIO block has 32 words")
+        Block([Machine("a", lambda: _Long(12)), Machine("b", lambda: _Long(12, 1)), Machine("c", lambda: _Long(8, 2))]).compile()        # 32 is allowed
+
+    def test_an_error_in_one_design_names_the_machine(self):
+        block = Block([Machine("fine", _Long), Machine("broken", _TwoOps)])
+        self.refuse(block, "^machine broken: ")
+
+    def test_irq_rel_is_refused_because_the_flag_depends_on_the_machine_number(self):
+        self.refuse(Block([Machine("a", _Long), Machine("b", _Rel)]), "machine b uses `irq ... rel`")
+
+    def test_machines_that_need_different_gpio_windows(self):
+        from pioweave.designs import HighPins, SquareWave
+        self.refuse(Block([Machine("high", HighPins), Machine("low", SquareWave)], RP2350BPioPlatform), r"different GPIO windows.*machine high fits only GPIO base 16.*machine low fits only GPIO base 0")
+
+    def test_a_machine_whose_own_pins_do_not_fit_a_window(self):
+        from pioweave.designs import SquareWave
+
+        class Far(Elaboratable):
+            def __init__(self):
+                self._MustUse__silence = True
+
+            def elaborate(self, platform):
+                m = Module()
+                a, b = platform.buffer(m, "o", "gpio", 5), platform.buffer(m, "o", "gpio", 40)
+                fsm_states(m, [("A", lambda: (m.d.sync.__iadd__([a.o.eq(1), b.o.eq(1)]), setattr(m, "next", "A")))])
+                return m
+        self.refuse(Block([Machine("ok", SquareWave), Machine("far", Far)], RP2350BPioPlatform), "machine far: ")
+
+    def test_a_shared_gpio_written_by_a_stalling_instruction(self):
+        from pioweave.designs import SquareWave, UartTx
+        # UartTx drives GPIO 0 by side-set in the `pull block` state, which stalls; SquareWave also writes GPIO 0
+        self.refuse(Block([Machine("tx", UartTx), Machine("sq", SquareWave)]),
+                    r"GPIO 0 is written by machines tx and sq; machine tx writes it in state PULL with an instruction that can stall")
+        # the same pin with set pins only (no stall) is allowed, and so is an UartTx on a pin of its own
+        Block([Machine("sq", SquareWave), Machine("sq2", SquareWave)]).compile()
+
+    def test_the_simulation_names_machines_that_exist(self):
+        from pioweave.designs import SquareWave
+        block = Block([Machine("sq", SquareWave)])
+        for key in ("tx", "tx_feed", "drain"):
+            with self.assertRaisesRegex(BlockError, "BlockSim.%s names a machine that is not in the block: nobody" % key):
+                block_run(block, BlockSim(**{key: {"nobody": ()}}))
+        with self.assertRaisesRegex(BlockError, "BlockSim.tx names a machine"):
+            emulate_block(block.compile(), BlockSim(tx={"nobody": ()}))
+
+    def test_one_clock_for_the_block_and_no_block_without_a_name_to_build(self):
+        from pioweave.designs import SquareWave
+        with self.assertRaisesRegex(BlockError, "give the project name"):
+            Block([Machine("sq", SquareWave)]).build()

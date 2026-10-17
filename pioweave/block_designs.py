@@ -1,11 +1,11 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
 """Example blocks with several state machines (docs/blocks.rst): each machine is an ordinary single-machine design, the machines handshake through the shared IRQ flags.
 
-  uart_baud   a baud tick generator (state machine 0) and a UART transmitter (state machine 1) that waits for the tick before every bit
-  handshake   a producer (state machine 0) puts nibbles on a four-bit bus and raises REQ (flag 1); a consumer (state machine 1) waits for REQ, reads the bus
-              of the other machine, raises ACK (flag 2) and pushes a byte for every two nibbles
-  ring        four stages in a ring: stage k waits for flag k, pulses GPIO k for k + 1 cycles, raises flag k + 1 (mod 4); the host raises flag 0 to start it
-  shared_pin  two machines write the same GPIO (the higher-numbered one wins when both write in the same cycle)
+- ``uart_baud``: a baud tick generator (state machine 0) and a UART transmitter (state machine 1) that waits for the tick before every bit
+- ``handshake``: a producer (state machine 0) puts nibbles on a four-bit bus and raises REQ (flag 1); a consumer (state machine 1) waits for REQ, reads the bus of the other
+  machine, raises ACK (flag 2) and pushes a byte for every two nibbles
+- ``ring``: four stages in a ring: stage k waits for flag k, pulses GPIO k for k + 1 cycles, raises flag k + 1 (mod 4); the host raises flag 0 to start it
+- ``shared_pin``: two machines write the same GPIO (the higher-numbered one wins when both write in the same cycle)
 
 `BLOCKS` maps a name to ``(function returning the Block, BlockSim keyword arguments)`` for the command line (``python -m pioweave list / build / emulate``) and the tests.
 """
