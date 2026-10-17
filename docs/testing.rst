@@ -21,7 +21,7 @@ What the tests prove
      - the builder: every instruction form, every error, and that its own encoder equals the real ``pioasm`` on 10,681 words in 351 programs
      - ``pioasm`` for the comparison
    * - ``tests/test_compile.py``
-     - the compiler: the ten example designs, 450 random control-flow designs and 250 random data-path designs run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version
+     - the compiler: the fifteen example designs, 450 random control-flow designs and 340 random data-path designs (autopull / autopush, ifempty / iffull, mov, IRQ flags with host events, wait pin, joined FIFOs) run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, the IRQ flags after every cycle, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version
      - the ``bitweave`` binary and ``pioasm``
    * - ``tests/test_emulator.py``, ``tests/test_emulator_datasheet.py``, ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``, ``tests/test_emulator_amaranth.py``, ``tests/test_emulator_differential.py``
      - the emulator: directed tests (facts cited from the datasheets), the ``emulate`` API, behaviours of another emulator worked out fresh, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs and on extra families (EXEC, IRQ, joins, thresholds, pin directions); see :doc:`emulator <emulator>`; a hardware test plan is in :doc:`hardware-testing` (nothing has run on a chip)
@@ -30,7 +30,7 @@ What the tests prove
      - everything the compiler must refuse, with the reason; the version gate; the FSM state-name lookup
      - nothing
    * - ``tests/test_project.py``
-     - the generated files, that the generated bitweave cases pass in bitweave, that the generated C projects build to a UF2 with the real Pico SDK, the deprecated ``build()`` keywords, the ``PioDesign`` base class
+     - the generated files, that the generated bitweave cases pass in bitweave, that the generated C projects (eight examples and a PIO version 1 design with ``STATUS_IRQ_SET`` and the IN pin count) build to a UF2 with the real Pico SDK, the deprecated ``build()`` keywords, the ``PioDesign`` base class
      - bitweave, ``pioasm``; the SDK build needs ``PIO_BUILD_FIRMWARE=1``
    * - ``tests/test_boards.py``
      - the board pins against the Pico SDK headers and a blink design compiled on each board

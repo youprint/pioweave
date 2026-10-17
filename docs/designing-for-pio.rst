@@ -7,7 +7,7 @@ The shape of a design
 ---------------------
 
 - Derive from ``pioweave.PioDesign`` (an ``amaranth.lib.wiring.Component`` with no ports) or from any ``Elaboratable``.
-- One module, one ``m.FSM()`` in the ``sync`` domain, no other logic: no ``m.d.comb`` statements of your own, no other clock domains, no extra submodules (only the pin buffers and the FIFO model of ``platform.shifter()``).
+- One module, one ``m.FSM()`` in the ``sync`` domain, no other logic: no ``m.d.comb`` statements of your own, no other clock domains, no extra submodules (only the pin buffers and the FIFO model, flags and IRQ model of ``platform.shifter()``).
 - The first state you define is PIO address 0 (the program order is the order of the ``m.State`` blocks; Amaranth numbers states by first mention, but pioweave uses the order they are defined).
 - At most 32 instructions (the program memory of one PIO block).
 - Pins: ``platform.buffer(m, "o", "gpio", 3)`` gives an output group on GPIO 3 (``pin.o``), ``"i"`` an input (``pin.i``). ``platform.request(...)`` plus ``amaranth.lib.io.Buffer`` does the same; request with ``dir="-"``. Board definitions add named groups (``"led"``, ``"button"``, see :doc:`boards <boards>`).
@@ -39,10 +39,12 @@ What one state may do, and the instruction it becomes
      - ``jmp pin LABEL`` (one JMP pin per program)
    * - a state that stays until ``m.If(pin.i)`` or ``m.If(~pin.i)`` lets it go to the next state
      - ``wait 1 gpio N`` / ``wait 0 gpio N``
+   * - the same with ``bus.i[k]`` on an input group of more than one pin
+     - ``wait 1 pin k`` / ``wait 0 pin k`` (relative to the IN base)
    * - ``m.next = OTHER`` and nothing but side-set
      - ``jmp OTHER``
    * - FIFO and shifter operations
-     - ``pull``, ``push``, ``out``, ``in``: see :doc:`the data path <data-path>`
+     - ``pull``, ``push``, ``out``, ``in``, ``mov`` with the OSR / ISR / pins / status, ``jmp !osre``, ``irq`` and ``wait irq``: see :doc:`the data path <data-path>`
    * - a state without any effect, after an instruction, that nothing jumps to
      - folded into the delay ``[n]`` of that instruction
    * - the last state going to a state other than the first, with a ``set`` / ``mov`` / data operation
@@ -71,13 +73,16 @@ What is refused
 Each of these raises ``PioCompileError`` naming the Amaranth source line:
 
 - more than one operation in a state (it would need two cycles: put them in separate states);
-- compound tests (``&``, ``|``), ``Elif`` chains, tests on anything but ``x``, ``y``, an input pin or a FIFO flag, comparisons with constants other than 0, ``x == y`` as a jump condition, a jump on a low pin;
+- compound tests (``&``, ``|``), ``Elif`` chains, tests on anything but ``x``, ``y``, an input pin, one bit of an input group (as a wait) or a flag of the data path (the FIFO flags, ``sh.osr_not_empty``), comparisons with constants other than 0, ``x == y`` as a jump condition, a jump on a low pin, a jump on one bit of an input group;
 - pin or register assignments that are not a constant, the other register, its complement, itself minus 1 (or the helper calls of the data path); assignments to parts of a signal;
 - ``m.Switch`` on multi-bit values; a decrement in only one branch; a decrement without the test that needs it;
 - registers or pins with a non-zero reset value;
+- a helper that can stall written as a plain call (``out`` with autopull, ``in`` with autopush, a blocking ``pull`` / ``push``, ``irq`` ``wait``, ``wait_irq``: use ``with``), and a stalling state that does not continue with the next state;
+- ``jmp !osre`` written as a jump while the OSR is *empty* (PIO jumps while it is not); ``out`` / ``mov`` to ``pindirs``, ``pc`` or ``exec`` (``ValueError`` with the reason when the design is written); ``mov`` from pins on PIO version 0;
+- more than one IN group (``in pins``, ``mov ..., pins`` and ``wait pin`` must name the same one), more than one OUT group;
 - two ``set`` groups or two side-set groups; pin groups that are not consecutive GPIOs; other clock domains; more than 32 instructions.
 
-Not built yet in the Amaranth front end: autopull and autopush, ``pull ifempty`` / ``push iffull``, ``out pindirs/pc/isr/exec``, ``in isr/osr``, ``mov`` with OSR/ISR/pins/status, ``irq``, ``wait irq``, ``wait pin`` relative to the input base, joined FIFOs, several state machines. The Python :doc:`builder <builder>` has every instruction.
+Not built yet in the Amaranth front end (the three destinations ``pindirs``, ``pc`` and ``exec`` of ``out`` and ``mov`` are refused on purpose, see the data path page): ``irq`` with ``prev`` / ``next`` (other PIO blocks), the RP2350 joins that turn the RX FIFO into registers, several state machines. The Python :doc:`builder <builder>` has every instruction.
 
 Timing between the two simulators
 ---------------------------------

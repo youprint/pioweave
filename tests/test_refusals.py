@@ -40,6 +40,20 @@ def fsm_states(m, states):
                 fn()
 
 
+def spare_module():
+    """A module and platform shifter pieces nobody will elaborate (the helper-misuse tests call the helpers directly): silenced so that Amaranth reports nothing."""
+    m = Module()
+    m._MustUse__silence = True
+    return m
+
+
+def shifter_for_misuse(platform, **config):
+    m = spare_module()
+    sh = platform.shifter(m, **config)
+    sh.fifo._MustUse__silence = True
+    return m, sh
+
+
 class RefusalCase(support.TestCase):
     def refuse(self, body, match, **kw):
         with self.assertRaisesRegex(PioCompileError, match):
@@ -410,10 +424,11 @@ class RefusalTests(RefusalCase):
 
 
 # ----------------------------------------------------------------------------- the data path
-def data_body(states, shifts=("right", "right"), pins=("o",)):
-    """A design with a shifter, the scratch registers and (optionally) an output and an input pin group; `states` gets (m, sh, x, y, out, inp) and returns [(name, fn)]."""
+def data_body(states, shifts=("right", "right"), pins=("o",), **config):
+    """A design with a shifter, the scratch registers and (optionally) an output and an input pin group; `states` gets (m, sh, x, y, out, inp) and returns [(name, fn)].
+    `config` goes to ``platform.shifter`` (autopull and the like)."""
     def body(m, pl):
-        sh = pl.shifter(m, out_shift=shifts[0], in_shift=shifts[1])
+        sh = pl.shifter(m, out_shift=shifts[0], in_shift=shifts[1], **config)
         x, y = pl.scratch("x"), pl.scratch("y")
         out = pl.buffer(m, "o", "gpio", 0)
         inp = pl.buffer(m, "i", "gpio", 8)
@@ -624,3 +639,403 @@ class DataPathRefusalTests(RefusalCase):
         self.assertEqual(fsm_state_names(Enumerated()), {0: "IDLE/0", 1: "RUN/1"})
         self.assertIsNone(fsm_state_names(Signal(2)))
         self.assertIsNone(fsm_state_names(Signal(2, decoder=lambda n: "no slash")))
+
+
+@support.cases
+class AutoRefusalTests(RefusalCase):
+    """Autopull and autopush (design note 2b): the instructions can stall, so the helpers must be written with `with`."""
+
+    def test_out_with_autopull_needs_the_with_form(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.out(m, "x", 4)                  # a plain call: the state would not stall while the OSR waits for the TX FIFO
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states, autopull=True, pull_thresh=8), r"test_refusals\.py:\d+: this helper call can stall")
+
+    def test_in_with_autopush_needs_the_with_form(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.in_(m, "x", 4)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states, autopush=True, push_thresh=8), "this helper call can stall")
+
+    def test_plain_calls_stay_valid_without_the_automatic_transfer(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.out(m, "x", 4)
+                m.next = "B"
+
+            def b():
+                with sh.in_(m, "x", 4):              # the with form is valid without autopush too: the body always runs
+                    m.next = "A"
+            return [("A", a), ("B", b)]
+        compile_body(data_body(states))
+
+    def test_autopull_out_must_continue_with_the_next_state(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.out(m, "x", 4):
+                    m.next = "C"
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states, autopull=True), "must continue with the next state")
+
+    def test_autopush_in_must_continue_with_the_next_state(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.in_(m, "y", 4):
+                    m.next = "C"
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states, autopush=True), "must continue with the next state")
+
+    def test_a_waiting_state_cannot_change_registers(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.out(m, "null", 4):
+                    m.d.sync += y.eq(3)
+                    m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states, autopull=True), "cannot change registers")
+
+    def test_a_test_around_a_stalling_helper_is_a_second_test(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with m.If(x != 0):
+                    with sh.in_(m, "null", 4):
+                        m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states, autopush=True), "more than one test")
+
+    def test_side_set_must_agree_while_the_out_waits(self):
+        def body(m, pl):
+            sh = pl.shifter(m, autopull=True)
+            side = pl.buffer(m, "o", "gpio", 3)
+            pl.pio_role(side, "side")
+
+            def a():
+                with sh.out(m, "null", 4):
+                    m.d.sync += side.o.eq(1)
+                    m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "side-set value differs between waiting and completing")
+
+    def test_a_flag_of_the_data_path_belongs_to_its_operation(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.out(m, "x", 4):
+                    m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        body = data_body(states, autopull=True)
+
+        def wrong(m, pl):                          # a hand-written test of the out flag around a pull
+            sh = pl.shifter(m, autopull=True)
+            flag = sh._flag(("out_go",), sh.osr_n < sh.pull_thresh, (5, 6, 7, 8), "body")
+
+            def a():
+                with m.If(flag):
+                    with sh.pull(m, block=False):
+                        m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        compile_body(body)
+        self.refuse(wrong, "belongs to `out pins")
+
+    def test_threshold_and_flag_arguments_are_checked_when_the_design_is_written(self):
+        for bad in (0, 33, 2.5, "8", True, None):
+            for key in ("pull_thresh", "push_thresh"):
+                with self.assertRaisesRegex(ValueError, "from 1 to 32"):
+                    RP2040PioPlatform().shifter(spare_module(), **{key: bad})
+
+
+@support.cases
+class ExtendedInstructionRefusalTests(RefusalCase):
+    """pull ifempty, push iffull, mov with the OSR / ISR / pins / status, out isr, in isr / osr, jmp !osre (design note 2c)."""
+
+    def test_unsupported_destinations_are_errors_when_the_design_is_written(self):
+        m, sh = shifter_for_misuse(RP2350PioPlatform())
+        for dest, why in (("pindirs", "no pin direction state"), ("pc", "computed jump"), ("exec", "executed instruction")):
+            with self.assertRaisesRegex(ValueError, "out %s is not supported.*%s" % (dest, why)):
+                sh.out(m, dest, 4)
+            with self.assertRaisesRegex(ValueError, "mov %s is not supported.*%s" % (dest, why)):
+                sh.mov(m, dest, "x")
+        with self.assertRaisesRegex(ValueError, "destination of out"):
+            sh.out(m, "z", 1)
+        with self.assertRaisesRegex(ValueError, "source of in"):
+            sh.in_(m, "pins", 1)
+        with self.assertRaisesRegex(ValueError, "destination of mov"):
+            sh.mov(m, "null", "x")
+        with self.assertRaisesRegex(ValueError, "source of mov"):
+            sh.mov(m, "x", "z")
+        with self.assertRaisesRegex(ValueError, 'op is "none"'):
+            sh.mov(m, "x", "y", "negate")
+
+    def test_mov_status_needs_its_configuration(self):
+        m, sh = shifter_for_misuse(RP2040PioPlatform())
+        with self.assertRaisesRegex(ValueError, "mov status needs platform.shifter"):
+            sh.mov(m, "x", "status")
+        for bad in ("both", 3):
+            with self.assertRaisesRegex(ValueError, "status is None"):
+                RP2040PioPlatform().shifter(spare_module(), status=bad)
+        with self.assertRaisesRegex(ValueError, 'status="irq" needs PIO version 1'):
+            RP2040PioPlatform().shifter(spare_module(), status="irq")
+        with self.assertRaisesRegex(ValueError, "status_n must be an integer from 0 to 7"):
+            RP2350PioPlatform().shifter(spare_module(), status="irq", status_n=8)
+        for bad in (-1, 16, 2.5, True):
+            with self.assertRaisesRegex(ValueError, "status_n"):
+                RP2040PioPlatform().shifter(spare_module(), status="tx", status_n=bad)
+
+    def test_mov_from_pins_needs_pio_version_1(self):
+        def body(m, pl):
+            sh = pl.shifter(m)
+            sh.fifo._MustUse__silence = True              # the ValueError below ends the elaboration, so nothing uses these
+            m._MustUse__silence = True
+            inp = pl.buffer(m, "i", "gpio", 4)
+            inp._MustUse__silence = True
+
+            def a():
+                sh.mov(m, "x", inp)
+                m.next = "A"
+            fsm_states(m, [("A", a)])
+        with self.assertRaisesRegex(ValueError, "PIO version 0"):
+            compile_body(body, chip=RP2040PioPlatform)
+        c = compile_body(body, chip=RP2350PioPlatform)
+        self.assertIn("mov x, pins", c.program.pio_text())
+
+    def test_jmp_not_osre_cannot_jump_while_the_osr_is_empty(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with m.If(~sh.osr_not_empty):
+                    m.next = "C"
+                with m.Else():
+                    m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states), "can jump while the OSR is not empty")
+
+    def test_jmp_not_osre_does_not_decrement(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                m.d.sync += x.eq(x - 1)
+                with m.If(sh.osr_not_empty):
+                    m.next = "C"
+                with m.Else():
+                    m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states), "cannot change a register")
+
+    def test_a_blocking_pull_ifempty_must_continue_with_the_next_state(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.pull(m, ifempty=True):
+                    m.next = "C"
+            return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states), "must continue with the next state")
+
+    def test_a_blocking_push_iffull_needs_with(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                with sh.push(m, iffull=True):
+                    pass
+                m.next = "B"
+            return [("A", a), ("B", lambda: setattr(m, "next", "A"))]
+        self.refuse(data_body(states), "(belongs to|stalls while|must stay in the state)")
+
+    def test_a_mov_and_another_operation_in_one_state(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.mov(m, "osr", "x")
+                m.d.sync += y.eq(3)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "needs two PIO instructions")
+
+        def twice(m, sh, x, y, out, inp):
+            def a():
+                sh.mov(m, "osr", "x")
+                sh.mov(m, "isr", "y")
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(twice), "do not match")
+
+    def test_a_hand_written_operand_code_is_refused(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.mov(m, "x", "y")
+                m.d.sync += sh.arg.eq(99)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "operand code of mov")
+
+
+@support.cases
+class IrqRefusalTests(RefusalCase):
+    """IRQ flags (design note 2d)."""
+
+    def test_flag_numbers_modes_and_polarities_are_checked_when_the_design_is_written(self):
+        m, sh = shifter_for_misuse(RP2040PioPlatform())
+        for bad in (-1, 8, 2.5, "1", True):
+            with self.assertRaisesRegex(ValueError, "from 0 to 7"):
+                sh.irq(m, bad)
+            with self.assertRaisesRegex(ValueError, "from 0 to 7"):
+                sh.wait_irq(m, bad)
+        with self.assertRaisesRegex(ValueError, 'mode of irq is "set"'):
+            sh.irq(m, 1, "pulse")
+        with self.assertRaisesRegex(ValueError, "polarity of wait irq"):
+            sh.wait_irq(m, 1, polarity=2)
+        sh.irq_model._MustUse__silence = True
+
+    def test_irq_wait_needs_the_with_form(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.irq(m, 3, "wait")
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "this helper call can stall")
+
+    def test_wait_irq_needs_the_with_form(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.wait_irq(m, 3)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "this helper call can stall")
+
+    def test_blocking_pull_and_push_without_with_are_refused_too(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.pull(m)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "this helper call can stall")
+
+    def test_irq_wait_and_wait_irq_must_continue_with_the_next_state(self):
+        for make in (lambda m, sh: sh.irq(m, 3, "wait"), lambda m, sh: sh.wait_irq(m, 3)):
+            def states(m, sh, x, y, out, inp, make=make):
+                def a():
+                    with make(m, sh):
+                        m.next = "C"
+                return [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))]
+            self.refuse(data_body(states), "must continue with the next state")
+
+    def test_irq_and_another_operation_in_one_state(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.irq(m, 1)
+                m.d.sync += x.eq(2)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "needs two PIO instructions")
+
+        def two(m, sh, x, y, out, inp):
+            def a():
+                sh.irq(m, 1)
+                sh.irq(m, 2, "clear")
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(two), "do not match")
+
+    def test_a_hand_written_flag_toggle_is_refused(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.irq(m, 1)
+                m.d.sync += sh.irq_model.clr_tog[1].eq(1)
+                m.next = "A"
+            return [("A", a)]
+        self.refuse(data_body(states), "do not match")
+
+    def test_wait_irq_flag_must_be_tested_through_its_helper(self):
+        def states(m, sh, x, y, out, inp):
+            def a():
+                sh.irq(m, 1)
+                m.next = "B"
+
+            def b():
+                with m.If(sh.irq_model.flag[1]):          # a hand-written test of the flag
+                    m.next = "A"
+            return [("A", a), ("B", b)]
+        self.refuse(data_body(states), "the test uses signal")
+
+    def test_a_side_set_value_must_agree_while_irq_wait_stalls(self):
+        def body(m, pl):
+            sh = pl.shifter(m)
+            side = pl.buffer(m, "o", "gpio", 3)
+            pl.pio_role(side, "side")
+
+            def a():
+                with sh.irq(m, 2, "wait"):
+                    m.d.sync += side.o.eq(1)
+                    m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "side-set value differs between waiting and completing")
+
+
+@support.cases
+class WaitPinAndJoinRefusalTests(RefusalCase):
+    """`wait pin` on one bit of an input group and joined FIFOs (design note 2e)."""
+
+    def bus(self, m, pl, n=3, name="bus", base=4):
+        from amaranth.build import Pins, Resource
+        pl.add_resources([Resource(name, 0, Pins(" ".join(str(base + k) for k in range(n)), dir="i"))])
+        return pl.buffer(m, "i", name, 0)
+
+    def test_a_bit_of_an_input_group_can_only_be_waited_for(self):
+        def body(m, pl):
+            bus = self.bus(m, pl)
+
+            def a():
+                with m.If(bus.i[1]):
+                    m.next = "C"
+                with m.Else():
+                    m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "can only be a wait")
+
+    def test_wait_pin_must_continue_with_the_next_state(self):
+        def body(m, pl):
+            bus = self.bus(m, pl)
+
+            def a():
+                with m.If(bus.i[1]):
+                    m.next = "C"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "C")), ("C", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "must continue with the next state")
+
+    def test_wait_pin_and_in_pins_share_one_group(self):
+        def body(m, pl):
+            bus = self.bus(m, pl)
+            other = self.bus(m, pl, 2, "other", 10)
+            sh = pl.shifter(m)
+
+            def a():
+                with m.If(bus.i[1]):
+                    m.next = "B"
+
+            def b():
+                sh.in_(m, other, 2)
+                m.next = "A"
+            fsm_states(m, [("A", a), ("B", b)])
+        self.refuse(body, "reads 2 different pin groups")
+
+    def test_a_bit_of_something_that_is_not_an_input_pin(self):
+        def body(m, pl):
+            x = pl.scratch("x")
+
+            def a():
+                with m.If(x[3]):
+                    m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "not an input pin")
+
+    def test_compound_tests_on_bits_are_still_refused(self):
+        def body(m, pl):
+            bus = self.bus(m, pl)
+
+            def a():
+                with m.If(bus.i[0] & bus.i[1]):
+                    m.next = "B"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "cannot be done by one PIO instruction")
+
+    def test_fifo_join_values(self):
+        for bad in ("both", "txrx", None, 4):
+            with self.assertRaisesRegex(ValueError, "fifo_join is"):
+                RP2040PioPlatform().shifter(spare_module(), fifo_join=bad)

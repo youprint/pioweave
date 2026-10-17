@@ -63,6 +63,22 @@
    73740
   ]
  },
+ "irq_handshake": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 1,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   57345,
+   49184,
+   57344,
+   49170,
+   8385,
+   49218
+  ]
+ },
  "noblock_echo": {
   "chip": "rp2040",
   "sim_config": {
@@ -76,6 +92,25 @@
    24640,
    16448,
    32768
+  ]
+ },
+ "osre_loop": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 8,
+   "out_base": 3,
+   "out_count": 1,
+   "out_shift": "right",
+   "pull_thresh": 8,
+   "status_n": 2,
+   "status_sel": "tx"
+  },
+  "words": [
+   32992,
+   24833,
+   224,
+   41029,
+   41218
   ]
  },
  "pin_branch": {
@@ -97,6 +132,21 @@
    57344
   ]
  },
+ "pin_gate": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 1,
+   "in_base": 4,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   8353,
+   57345,
+   8224,
+   57344
+  ]
+ },
  "pulse_train": {
   "chip": "rp2040",
   "sim_config": {
@@ -112,6 +162,26 @@
    41538
   ]
  },
+ "spi_master": {
+  "chip": "rp2040",
+  "sim_config": {
+   "autopull": true,
+   "autopush": true,
+   "dirs": 12,
+   "in_base": 4,
+   "in_shift": "left",
+   "out_base": 3,
+   "out_count": 1,
+   "out_shift": "left",
+   "pull_thresh": 8,
+   "push_thresh": 8,
+   "sideset_base": 2
+  },
+  "words": [
+   28929,
+   22785
+  ]
+ },
  "square_wave": {
   "chip": "rp2040",
   "sim_config": {
@@ -122,6 +192,20 @@
   "words": [
    57601,
    57600
+  ]
+ },
+ "tx_join": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 240,
+   "fifo_join": "tx",
+   "out_base": 4,
+   "out_count": 4,
+   "out_shift": "right"
+  },
+  "words": [
+   32928,
+   24836
   ]
  },
  "uart_rx": {

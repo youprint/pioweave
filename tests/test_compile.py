@@ -38,9 +38,10 @@ class ExampleTests(support.TestCase):
         factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
         compiled = compile_factory(factory, name)
         a = cosim.amaranth_run(factory, cycles, stim, **opts)
-        b = cosim.pio_run(compiled, cycles, stim, tx=opts.get("tx", ()), tx_feed=opts.get("tx_feed", ()), drain=opts.get("drain", True))
+        b = cosim.pio_run(compiled, cycles, stim, **opts)
         self.assertEqual(a["waves"], b["waves"])
         self.assertTrue(a["rx"] == b["rx"] and a["tx_left"] == b["tx_left"] and a["rx_left"] == b["rx_left"])
+        self.assertTrue(not a["irq"] or a["irq"] == b["irq"])
         self.assertTrue(any("1" in w for w in a["waves"].values()) or a["rx"], "the example should drive something")
 
     def test_square_wave_compiles_to_two_instructions(self):
@@ -343,7 +344,7 @@ def run_both(name, **override):
     factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
     compiled = compile_factory(factory, name)
     a = cosim.amaranth_run(factory, cycles, stim, **opts)
-    b = cosim.pio_run(compiled, cycles, stim, tx=opts.get("tx", ()), tx_feed=opts.get("tx_feed", ()), drain=opts.get("drain", True))
+    b = cosim.pio_run(compiled, cycles, stim, **opts)
     return compiled, a, b
 
 
@@ -405,9 +406,11 @@ class DataPathTests(support.TestCase):
         factory = cosim.random_data_factory(spec)
         compiled = compile_factory(factory, "rnd")
         cycles = 160
-        a = cosim.amaranth_run(factory, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"])
-        b = cosim.pio_run(compiled, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"])
+        events = dict(irq_set=spec["irq_set"], irq_clear=spec["irq_clear"])
+        a = cosim.amaranth_run(factory, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"], **events)
+        b = cosim.pio_run(compiled, cycles, spec["stim"], tx=spec["tx"], tx_feed=spec["tx_feed"], drain=spec["drain"], **events)
         why = "seed %d\n%s\n%s" % (seed, compiled.program.pio_text(), spec)
+        self.assertTrue(not a["irq"] or a["irq"] == b["irq"], why + "\n%s\n%s" % (a["irq"], b["irq"]))
         self.assertEqual({g: w for g, w in a["waves"].items() if g in b["waves"]}, b["waves"], why)
         self.assertTrue(cosim.same_rx(a, b, spec["drain"]), why)
         self.assertEqual((a["tx_left"], a["rx_left"]), (b["tx_left"], b["rx_left"]), why)
@@ -415,7 +418,20 @@ class DataPathTests(support.TestCase):
     # ----------------------------------------------------------------------------- the same programs on every Amaranth version
     def test_example_programs_are_the_same_on_every_amaranth_version(self):
         """python/pioweave/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
-        The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently."""
+        The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently.
+
+        The file is checked in. After adding or changing an example design, regenerate it with Amaranth 0.5.10 (from the repository root, with ``PYTHONPATH=.``)::
+
+            import json
+            from pioweave import PLATFORMS, compile_design, designs
+            out = {}
+            for name in sorted(designs.PROGRAMS):
+                cls, chip, stim, cycles, opts = designs.entry(name)
+                c = compile_design(cls(), PLATFORMS[chip](), name)
+                out[name] = {"chip": chip, "words": c.program.words(), "sim_config": c.sim_config()}
+            with open("tests/example_programs.json", "w") as fh:
+                fh.write(json.dumps(out, indent=1, sort_keys=True))
+        """
         import json
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "example_programs.json")) as fh:
             want = json.load(fh)
@@ -424,3 +440,270 @@ class DataPathTests(support.TestCase):
             cls, chip, stim, cycles, opts = pio_designs.entry(name)
             c = compile_factory(lambda cls=cls, chip=chip: (cls(), PLATFORMS[chip]()), name)
             self.assertEqual({"chip": chip, "words": c.program.words(), "sim_config": c.sim_config()}, ref, name)
+
+
+# ----------------------------------------------------------------------------- autopull / autopush, pull ifempty / push iffull, mov with the OSR / ISR / pins / status
+def data_design(body, chip="rp2040", resources=(), **config):
+    """A design with one shifter (`config` goes to platform.shifter) and the pins gpio 0 (output), gpio 1 (side-set output) and gpio 4 (input); `body(m, sh, pl, io)` builds the FSM."""
+    def factory():
+        pl = PLATFORMS[chip]()
+        pl.add_resources(list(resources))
+
+        def build(m, platform):
+            sh = platform.shifter(m, **config)
+            io_ = {"out": platform.buffer(m, "o", "gpio", 0), "side": platform.buffer(m, "o", "gpio", 1), "in": platform.buffer(m, "i", "gpio", 4)}
+            platform.pio_role(io_["side"], "side")
+            body(m, sh, platform, io_)
+        return _Dyn(build), pl
+    return factory
+
+
+def both_ways(factory, cycles=80, stim=None, tx=(), tx_feed=(), drain=True, irq_set=(), irq_clear=()):
+    """Compile `factory`, run it in the Amaranth simulation and in the bitweave PIO simulator; assert that pins, words pushed, the IRQ flags after every cycle and the FIFO
+    contents left agree."""
+    compiled = compile_factory(factory, "t")
+    a = cosim.amaranth_run(factory, cycles, stim, tx, tx_feed, drain, irq_set, irq_clear)
+    b = cosim.pio_run(compiled, cycles, stim, tx=tx, tx_feed=tuple(tx_feed), drain=drain, irq_set=irq_set, irq_clear=irq_clear)
+    assert {g: w for g, w in a["waves"].items() if g in b["waves"]} == b["waves"], (a["waves"], b["waves"], compiled.program.pio_text())
+    assert cosim.same_rx(a, b, drain) and (a["tx_left"], a["rx_left"]) == (b["tx_left"], b["rx_left"]), (a, b, compiled.program.pio_text())
+    assert not a["irq"] or a["irq"] == b["irq"], (a["irq"], b["irq"], compiled.program.pio_text())
+    return compiled, a, b
+
+
+@support.cases
+class AutoTransferTests(support.TestCase):
+    @needs_tools
+    def test_autopull_out_stalls_when_the_tx_fifo_is_empty_and_refills_in_the_background(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("OUT"):
+                    with sh.out(m, io["out"], 1):
+                        m.next = "HOLD"
+                with m.State("HOLD"):
+                    m.next = "OUT"
+        c, a, b = both_ways(data_design(body, autopull=True, pull_thresh=4), cycles=60, tx=[0b0101], tx_feed=[(30, 0b1111)])
+        self.assertEqual(c.program.pio_text().count("out pins, 1"), 1)
+        w = a["waves"][0]
+        # cycle 0 is the stall in which the empty OSR is refilled; then the four bits of 0b0101, least significant first, two cycles each; then the pin keeps its level
+        # while the OUT waits for the FIFO, until the host writes the next word in cycle 30
+        self.assertTrue(w[:9] == "011001100" and w[9:31] == "0" * 22 and "1" in w[31:], w)
+        self.assertEqual(c.sim_config()["pull_thresh"], 4)
+
+    @needs_tools
+    def test_autopush_in_stalls_while_the_rx_fifo_is_full(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("IN"):
+                    m.d.sync += io["side"].o.eq(1)
+                    with sh.in_(m, "x", 8):
+                        m.next = "TOGGLE"
+                with m.State("TOGGLE"):
+                    m.d.sync += io["side"].o.eq(0)
+                    m.next = "IN"
+        c, a, b = both_ways(data_design(body, autopush=True, push_thresh=8), cycles=40, drain=False)
+        self.assertTrue(a["rx_left"] == b["rx_left"] == 4)
+        self.assertTrue(a["waves"][1][-10:] == "1" * 10)      # the fifth push cannot complete: the in stalls (side-set 1) and the pin stays high
+
+    @needs_tools
+    def test_autopush_with_a_threshold_below_32_and_pull_noop_after_autopull(self):
+        def body(m, sh, pl, io):
+            x = pl.scratch("x")
+            with m.FSM():
+                with m.State("SET"):
+                    m.d.sync += x.eq(5)
+                    m.next = "PULL"
+                with m.State("PULL"):
+                    with sh.pull(m):                 # does nothing right after an autopull refill (osr count 0)
+                        m.next = "OUT"
+                with m.State("OUT"):
+                    with sh.out(m, "x", 3):
+                        m.next = "IN"
+                with m.State("IN"):
+                    with sh.in_(m, "x", 3):
+                        m.next = "SET"
+        both_ways(data_design(body, autopull=True, pull_thresh=6, autopush=True, push_thresh=6), cycles=80, tx=[0x2D, 0x1B, 7], tx_feed=[(40, 0x55)])
+
+
+@support.cases
+class ExtendedInstructionTests(support.TestCase):
+    def one_state_each(self, ops, chip="rp2040", **config):
+        """A design with one state per entry of `ops` (callables (m, sh, pl, io)); returns the compiled program."""
+        def body(m, sh, pl, io):
+            with m.FSM():
+                for i, op in enumerate(ops):
+                    with m.State("S%d" % i):
+                        op(m, sh, pl, io)
+                        m.next = "S%d" % ((i + 1) % len(ops))
+        return compile_factory(data_design(body, chip, **config), "t")
+
+    def test_the_text_of_the_new_forms(self):
+        def pull_ifempty(m, sh, pl, io):
+            with sh.pull(m, block=False, ifempty=True):
+                pass
+
+        def push_iffull_nb(m, sh, pl, io):
+            with sh.push(m, block=False, iffull=True):
+                pass
+        ops = [pull_ifempty, push_iffull_nb,
+               lambda m, sh, pl, io: sh.mov(m, "x", "osr"), lambda m, sh, pl, io: sh.mov(m, "osr", "y", "reverse"), lambda m, sh, pl, io: sh.mov(m, "isr", "x", "invert"),
+               lambda m, sh, pl, io: sh.mov(m, io["out"], "isr"), lambda m, sh, pl, io: sh.mov(m, "y", "status"),
+               lambda m, sh, pl, io: sh.in_(m, "isr", 8), lambda m, sh, pl, io: sh.in_(m, "osr", 7), lambda m, sh, pl, io: sh.out(m, "isr", 5),
+               lambda m, sh, pl, io: sh.mov(m, "x", "null", "invert")]
+        c = self.one_state_each(ops, status="rx", status_n=3, pull_thresh=16, push_thresh=12)
+        text = c.program.pio_text()
+        for line in ("pull ifempty noblock", "push iffull noblock", "mov x, osr", "mov osr, ::y", "mov isr, !x", "mov pins, isr", "mov y, status", "in isr, 8", "in osr, 7", "out isr, 5", "mov x, !null"):
+            self.assertIn(line, text)
+        cfg = c.sim_config()
+        self.assertTrue(cfg["status_sel"] == "rx" and cfg["status_n"] == 3 and cfg["pull_thresh"] == 16 and cfg["push_thresh"] == 12 and "autopull" not in cfg)
+
+    def test_mov_from_pins_masks_the_input_on_pio_version_1(self):
+        ops = [lambda m, sh, pl, io: sh.mov(m, "x", io["in"])]
+        c = self.one_state_each(ops + [lambda m, sh, pl, io: sh.mov(m, "osr", "x")], chip="rp2350")
+        self.assertIn("mov x, pins", c.program.pio_text())
+        self.assertEqual(c.sim_config()["in_count"], 1)
+        self.assertEqual(c.in_pin.gpios, [4])
+
+    def test_jmp_not_osre(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("A"):
+                    sh.out(m, io["out"], 1)
+                    m.next = "B"
+                with m.State("B"):
+                    with m.If(sh.osr_not_empty):
+                        m.next = "A"
+                    with m.Else():
+                        m.next = "C"
+                with m.State("C"):
+                    m.next = "A"
+        c = compile_factory(data_design(body, pull_thresh=4), "t")
+        self.assertIn("jmp !osre s_A", c.program.pio_text())
+
+    @needs_tools
+    def test_every_new_form_agrees_with_the_pio_simulator(self):
+        def body(m, sh, pl, io):
+            x, y = pl.scratch("x"), pl.scratch("y")
+            with m.FSM():
+                with m.State("PULL"):
+                    with sh.pull(m, ifempty=True):
+                        m.next = "OUT"
+                with m.State("OUT"):
+                    with sh.out(m, "isr", 5):
+                        m.next = "MOV_X"
+                with m.State("MOV_X"):
+                    sh.mov(m, "x", "osr", "reverse")
+                    m.next = "MOV_Y"
+                with m.State("MOV_Y"):
+                    sh.mov(m, "y", "isr", "invert")
+                    m.next = "IN_X"
+                with m.State("IN_X"):
+                    with sh.in_(m, "osr", 6):
+                        m.next = "IN_Y"
+                with m.State("IN_Y"):
+                    with sh.in_(m, "isr", 7):
+                        m.next = "MOV_OSR"
+                with m.State("MOV_OSR"):
+                    sh.mov(m, "osr", "x", "invert")
+                    m.next = "OUTP"
+                with m.State("OUTP"):
+                    with sh.out(m, io["out"], 1):
+                        m.next = "ST"
+                with m.State("ST"):
+                    sh.mov(m, "x", "status")
+                    m.next = "PUSH"
+                with m.State("PUSH"):
+                    with sh.push(m, iffull=True):
+                        m.next = "OSRE"
+                with m.State("OSRE"):
+                    with m.If(sh.osr_not_empty):
+                        m.next = "OUTP"
+                    with m.Else():
+                        m.next = "LAST"
+                with m.State("LAST"):
+                    sh.mov(m, "isr", "y")
+                    m.next = "PULL"
+        both_ways(data_design(body, push_thresh=20, pull_thresh=12, status="tx", status_n=2), cycles=120, tx=[0xDEADBEEF, 0x12345678], tx_feed=[(50, 0xCAFEF00D)])
+        both_ways(data_design(body, autopull=True, pull_thresh=12, autopush=True, push_thresh=20, status="rx", status_n=1), cycles=120, tx=[0xDEADBEEF, 0x12345678], drain=False)
+
+
+@support.cases
+class IrqTests(support.TestCase):
+    @needs_tools
+    def test_irq_wait_sets_the_flag_and_stalls_until_the_host_clears_it(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("UP"):
+                    m.d.sync += io["out"].o.eq(1)
+                    m.next = "WAIT"
+                with m.State("WAIT"):
+                    with sh.irq(m, 5, "wait"):
+                        m.next = "DOWN"
+                with m.State("DOWN"):
+                    m.d.sync += io["out"].o.eq(0)
+                    m.next = "UP"
+        c, a, b = both_ways(data_design(body), cycles=40, irq_clear=[(15, 5), (30, 5)])
+        self.assertIn("irq wait 5", c.program.pio_text())
+        # flag 5 is raised by the first cycle of the irq (visible from cycle 2 on) and stays up until the host lowers it at the start of cycle 15
+        self.assertEqual(a["irq"][0], 0)
+        self.assertTrue(all(v == 0x20 for v in a["irq"][2:15]))
+        self.assertEqual(a["waves"][0][:17], "1" * 16 + "0")          # the instruction completes in cycle 15, the next state lowers the pin in cycle 16
+        self.assertEqual(a["irq"], b["irq"])
+
+    @needs_tools
+    def test_wait_irq_one_clears_the_flag_and_wait_irq_zero_does_not(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("ONE"):
+                    with sh.wait_irq(m, 2, 1):
+                        m.next = "ZERO"
+                with m.State("ZERO"):
+                    with sh.wait_irq(m, 3, 0):
+                        m.next = "PIN"
+                with m.State("PIN"):
+                    m.d.sync += io["out"].o.eq(1)
+                    m.next = "ONE2"
+                with m.State("ONE2"):
+                    with sh.wait_irq(m, 2, 1):
+                        m.next = "PIN0"
+                with m.State("PIN0"):
+                    m.d.sync += io["out"].o.eq(0)
+                    m.next = "ONE"
+        c, a, b = both_ways(data_design(body), cycles=40, irq_set=[(4, 2), (4, 3), (20, 2), (22, 3)], irq_clear=[(8, 3), (25, 3)])
+        text = c.program.pio_text()
+        self.assertTrue("wait 1 irq 2" in text and "wait 0 irq 3" in text)
+        self.assertEqual(a["irq"], b["irq"])
+
+    @needs_tools
+    def test_a_flag_set_and_cleared_by_the_program_in_one_cycle_ends_up_set(self):
+        # the host clears flag 1 in the cycle the program sets it: the clear comes first (start of the cycle), the set at its end
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("SET"):
+                    sh.irq(m, 1)
+                    m.next = "NOP"
+                with m.State("NOP"):
+                    m.next = "CLEAR"
+                with m.State("CLEAR"):
+                    sh.irq(m, 1, "clear")
+                    m.next = "SET"
+        both_ways(data_design(body), cycles=30, irq_clear=[(0, 1), (3, 1), (7, 1), (9, 1)], irq_set=[(3, 1), (8, 1)])
+
+    @needs_tools
+    def test_mov_status_from_the_irq_flags_on_pio_version_1_and_the_rel_form(self):
+        def body(m, sh, pl, io):
+            with m.FSM():
+                with m.State("RAISE"):
+                    sh.irq(m, 6, "set", rel=True)
+                    m.next = "STATUS"
+                with m.State("STATUS"):
+                    sh.mov(m, "x", "status")
+                    m.next = "SHOW"
+                with m.State("SHOW"):
+                    sh.mov(m, io["out"], "x")
+                    m.next = "DROP"
+                with m.State("DROP"):
+                    sh.irq(m, 6, "clear", rel=True)
+                    m.next = "RAISE"
+        c, a, b = both_ways(data_design(body, chip="rp2350", status="irq", status_n=6), cycles=30, irq_clear=[(7, 6)])
+        self.assertTrue("irq set 6 rel" in c.program.pio_text() and c.sim_config()["status_sel"] == "irq" and c.irq_rel)
+        self.assertEqual(a["waves"][0][:4], "0011")           # mov x, status sees flag 6 (raised in the cycle before) and mov pins, x shows its bit 0

@@ -40,7 +40,53 @@ def _toml_value(v):
     return '"%s"' % v if isinstance(v, str) else ("true" if v is True else "false" if v is False else "%d" % v)
 
 
-def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=True):
+def emu_run(compiled, cycles, stim=None, tx=(), tx_feed=(), drain=True, irq_set=(), irq_clear=()):
+    """Run the compiled program in the pioweave emulator like `pioweave.emulator.run_compiled` does, with the host IRQ events of a bitweave case (`irq_clear` first, then
+    `irq_set`, at the start of the cycle, before the instruction). Returns {"waves", "rx" [(cycle, word)], "rx_left_words", "rx_left", "tx_left", "irq" (the flags after each cycle)}."""
+    from pioweave.builder.program import CHIP_VERSION
+    from pioweave.emulator.core import PioBlock
+    cfg = dict(compiled.sim_config())
+    window = {compiled.pin(g): w for g, w in (stim or {}).items() if 0 <= compiled.pin(g) <= 31}
+    block = PioBlock(version=CHIP_VERSION[compiled.chip], gpio_base=cfg.pop("gpio_base", 0), sync_cycles=0)
+    loaded = block.load(compiled.program)
+    sm = block.sm[0]
+    if "sideset_base" in cfg:
+        cfg["side_base"] = cfg.pop("sideset_base")
+    x, y, dirs = cfg.pop("x", 0), cfg.pop("y", 0), cfg.pop("dirs", 0)
+    sm.configure(program=loaded, **cfg)
+    sm.enable()
+    sm.x, sm.y = x, y
+    block.dirs = dirs
+    for w in tx:
+        sm.put(w)
+    feeds = sorted(tx_feed)
+    pads, rx, irq = [], [], []
+    for t in range(cycles):
+        for c, w in feeds:
+            if c == t:
+                sm.put(w)
+        for c, f in irq_clear:
+            if c == t:
+                block.irq &= ~(1 << f)
+        for c, f in irq_set:
+            if c == t:
+                block.irq |= 1 << f
+        v = 0
+        for pin, w in window.items():
+            if w[min(t, len(w) - 1)] == "1":
+                v |= 1 << pin
+        block.ext = v
+        block.step()
+        if drain:
+            while len(sm.rx):
+                rx.append((t, sm.get()))
+        pads.append(block.pads())
+        irq.append(block.irq)
+    return {"waves": {g: "".join(str((p >> compiled.pin(g)) & 1) for p in pads) for g in compiled.output_gpios}, "rx": rx, "rx_left_words": list(sm.rx.q),
+            "rx_left": len(sm.rx), "tx_left": len(sm.tx), "irq": irq}
+
+
+def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=True, irq_set=(), irq_clear=()):
     """Run the compiled program in the bitweave PIO simulator; returns {"waves": {gpio: waveform} for the output GPIOs, "rx": [(cycle, word)], "rx_left", "tx_left"}
     or raises."""
     bw, pioasm = find_bitweave(), find_pioasm()
@@ -67,6 +113,9 @@ def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=Tr
                 lines.append('%d = "%s"' % (pin, w))
         for c, w in tx_feed:
             lines += ["[[pio.p.sim.tx_feed]]", "cycle = %d" % c, "value = %d" % w]
+        for key, events in (("irq_set", irq_set), ("irq_clear", irq_clear)):
+            for c, f in events:
+                lines += ["[[pio.p.sim.%s]]" % key, "cycle = %d" % c, "flag = %d" % f]
         with open(os.path.join(d, "bitweave.toml"), "w") as fh:
             fh.write("\n".join(lines) + "\n")
         r = subprocess.run([bw, "--config", os.path.join(d, "bitweave.toml"), "--json", "pio", "p"], capture_output=True, text=True)
@@ -78,7 +127,8 @@ def pio_run(compiled, cycles, stim=None, extra=None, tx=(), tx_feed=(), drain=Tr
             raise RuntimeError("PIO simulation error: %s" % sim["error"])
         trace = sim["trace"]
         return {"waves": {g: "".join(str((t["pad"] >> compiled.pin(g)) & 1) for t in trace) for g in compiled.output_gpios},
-                "rx": [(e["cycle"], e["value"]) for e in sim["rx"]], "rx_left": len(sim["rx_left"]), "rx_left_words": list(sim["rx_left"]), "tx_left": sim["tx_left"]}
+                "rx": [(e["cycle"], e["value"]) for e in sim["rx"]], "rx_left": len(sim["rx_left"]), "rx_left_words": list(sim["rx_left"]), "tx_left": sim["tx_left"],
+                "irq": [t["irq"] for t in trace]}
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -241,6 +291,7 @@ def random_factory(spec):
 
 
 # ----------------------------------------------------------------------------- random designs with a data path (FIFOs, OSR, ISR)
+OUT_IN_KINDS = ("out_x", "out_y", "out_null", "out_pins", "out_isr", "in_x", "in_y", "in_null", "in_pins", "in_isr", "in_osr")
 DATA_KINDS = ["nop", "nop", "pull_b", "pull_b", "pull_nb", "push_b", "push_nb", "out_x", "out_y", "out_null", "out_pins", "out_pins", "in_x", "in_y", "in_null",
               "in_pins", "in_pins", "setx", "sety", "mov", "jx"]
 
@@ -260,7 +311,7 @@ class RandomDataDesign(Elaboratable):
         side = platform.buffer(m, "o", "sidebus", 0) if s["side_w"] else None
         if side is not None:
             platform.pio_role(side, "side")
-        sh = platform.shifter(m, out_shift=s["out_shift"], in_shift=s["in_shift"])
+        sh = platform.shifter(m, out_shift=s["out_shift"], in_shift=s["in_shift"], **s.get("shifter", {}))
         x, y = platform.scratch("x"), platform.scratch("y")
         n = len(s["states"])
         with m.FSM():
@@ -282,24 +333,46 @@ class RandomDataDesign(Elaboratable):
                     elif k == "push_nb":
                         with sh.push(m, block=False):
                             m.next = fall
+                    elif k in ("pull_ie", "pull_ie_nb"):
+                        with sh.pull(m, block=k == "pull_ie", ifempty=True):
+                            m.next = fall
+                    elif k in ("push_if", "push_if_nb"):
+                        with sh.push(m, block=k == "push_if", iffull=True):
+                            m.next = fall
+                    elif k == "movg":
+                        ends = {"x": "x", "y": "y", "osr": "osr", "isr": "isr"}
+                        sh.mov(m, outp if st["mdst"] == "pins" else ends[st["mdst"]], inp if st["msrc"] == "pins" else {"null": "null", "status": "status", **ends}[st["msrc"]], st["mop"])
+                        m.next = fall
+                    elif k == "wait_pin":
+                        bit = inp.i[st["bit"]]
+                        with m.If(bit if st["level"] else ~bit):          # wait 1|0 pin N (relative to the IN base)
+                            m.next = fall
+                    elif k in ("irq_set", "irq_clear"):
+                        sh.irq(m, st["flag"], k[4:], rel=st["rel"])
+                        m.next = fall
+                    elif k == "irq_wait":
+                        with sh.irq(m, st["flag"], "wait", rel=st["rel"]):
+                            m.next = fall
+                    elif k == "wait_irq":
+                        with sh.wait_irq(m, st["flag"], st["pol"], rel=st["rel"]):
+                            m.next = fall
+                    elif k == "josre":
+                        with m.If(sh.osr_not_empty):
+                            m.next = "S%d" % st["target"]
+                        with m.Else():
+                            m.next = fall
+                    elif k in OUT_IN_KINDS:
+                        shift = sh.out if k.startswith("out") else sh.in_
+                        target = {"x": "x", "y": "y", "null": "null", "isr": "isr", "osr": "osr", "pins": outp if k.startswith("out") else inp}[k.split("_")[1]]
+                        auto = s.get("shifter", {}).get("autopull" if k.startswith("out") else "autopush")
+                        if auto or st.get("with"):
+                            with shift(m, target, st["n"]):          # the body runs when the instruction completes
+                                m.next = fall
+                        else:
+                            shift(m, target, st["n"])
+                            m.next = fall
                     else:
-                        if k == "out_x":
-                            sh.out(m, "x", st["n"])
-                        elif k == "out_y":
-                            sh.out(m, "y", st["n"])
-                        elif k == "out_null":
-                            sh.out(m, "null", st["n"])
-                        elif k == "out_pins":
-                            sh.out(m, outp, st["n"])
-                        elif k == "in_x":
-                            sh.in_(m, "x", st["n"])
-                        elif k == "in_y":
-                            sh.in_(m, "y", st["n"])
-                        elif k == "in_null":
-                            sh.in_(m, "null", st["n"])
-                        elif k == "in_pins":
-                            sh.in_(m, inp, st["n"])
-                        elif k == "setx":
+                        if k == "setx":
                             m.d.sync += x.eq(st["value"])
                         elif k == "sety":
                             m.d.sync += y.eq(st["value"])
@@ -325,7 +398,8 @@ def random_data_spec(seed):
     spec = {"chip": chip, "out_w": r.randint(1, 4), "in_w": r.randint(1, 3), "side_w": r.choice([0, 0, 1]), "out_base": r.randint(20, 24) if hi else r.randint(0, 3),
             "in_base": 33 if hi else 10, "side_base": 40 if hi else 8, "out_shift": r.choice(["left", "right"]), "in_shift": r.choice(["left", "right"]),
             "drain": r.random() < .7, "tx": [r.getrandbits(32) for _ in range(r.randint(0, 4))], "states": []}
-    spec["tx_feed"] = sorted((r.randint(1, 90), r.getrandbits(32)) for _ in range(r.randint(0, 3)))
+    feed = sorted((r.randint(1, 90), r.getrandbits(32)) for _ in range(r.randint(0, 3)))
+    spec["tx_feed"] = [e for k, e in enumerate(feed) if k == 0 or e[0] != feed[k - 1][0]]       # the Amaranth testbench writes one word per cycle
     for i in range(n):
         k = r.choice(DATA_KINDS)
         st = {"kind": k, "src": r.choice("xy"), "dst": r.choice("xy"), "inv": r.random() < .4, "value": r.randrange(0, 6)}
@@ -343,7 +417,59 @@ def random_data_spec(seed):
             st["side"] = r.randrange(1 << spec["side_w"])
         spec["states"].append(st)
     spec["stim"] = {spec["in_base"] + j: "".join(r.choice("01") for _ in range(r.randint(10, 40))) for j in range(spec["in_w"])}
+    _extend_data_spec(spec, seed)
     return spec
+
+
+NEW_DATA_KINDS = ["pull_ie", "pull_ie_nb", "push_if", "push_if_nb", "out_isr", "in_isr", "in_osr", "movg", "movg", "movg", "movg", "josre", "irq_set", "irq_set", "irq_clear",
+                  "irq_wait", "wait_irq", "wait_irq", "wait_pin", "wait_pin"]
+MOV_DSTS = ["x", "y", "osr", "isr", "pins"]
+MOV_SRCS = ["x", "y", "null", "status", "isr", "osr", "pins"]
+
+
+def _extend_data_spec(spec, seed):
+    """Half of the seeds keep the original design; the others switch on the newer features (a second random stream, so the first half is the design the
+    generator always drew): autopull / autopush with thresholds, and `with` forms of out / in."""
+    r = random.Random(90_000 + seed)
+    spec["shifter"] = {}
+    spec["irq_set"], spec["irq_clear"] = [], []
+    if r.random() < .5:
+        return
+    sh = spec["shifter"]
+    if r.random() < .6:
+        sh["autopull"], sh["pull_thresh"] = True, r.choice([32, 8, 16, r.randint(1, 32)])
+    if r.random() < .6:
+        sh["autopush"], sh["push_thresh"] = True, r.choice([32, 8, 16, r.randint(1, 32)])
+    for key in ("pull_thresh", "push_thresh"):          # also without autopull / autopush: pull ifempty, push iffull and jmp !osre use them
+        if key not in sh and r.random() < .7:
+            sh[key] = r.choice([8, 16, r.randint(1, 32)])
+    sh["fifo_join"] = r.choice(["none", "none", "tx", "rx"])
+    if sh["fifo_join"] == "tx":              # the TX FIFO holds eight words
+        spec["tx"] = spec["tx"] + [r.getrandbits(32) for _ in range(r.randint(0, 4))]
+    sh["status"] = r.choice(["tx", "rx"] + ([] if spec["chip"] == "rp2040" else ["irq"]))
+    sh["status_n"] = r.randint(0, 7 if sh["status"] == "irq" else 6)
+    spec["irq_set"] = sorted((r.randint(0, 90), r.randint(0, 3)) for _ in range(r.randint(0, 5)))          # the host raises and lowers IRQ flags (flags 0 to 3 mostly, to interact)
+    spec["irq_clear"] = sorted((r.randint(0, 90), r.randint(0, 3)) for _ in range(r.randint(0, 5)))
+    n = len(spec["states"])
+    for i, st in enumerate(spec["states"]):
+        st["with"] = r.random() < .5
+        if r.random() < .35:           # a newer kind in place of the old one
+            k = r.choice(NEW_DATA_KINDS)
+            st["kind"] = k
+            if k in ("out_isr", "in_isr", "in_osr"):
+                st["n"] = r.choice([1, 2, 5, 8, 16, 31, 32, r.randint(1, 32)])
+            if k == "movg":
+                st["mdst"] = r.choice(MOV_DSTS)
+                st["msrc"] = r.choice([c for c in MOV_SRCS if c != "pins" or spec["chip"] != "rp2040"])
+                st["mop"] = r.choice(["none", "none", "invert", "reverse"])
+            if k == "wait_pin":
+                st["bit"], st["level"] = r.randrange(spec["in_w"]), r.random() < .5
+            if k.startswith("irq") or k == "wait_irq":
+                st["flag"], st["rel"], st["pol"] = r.choice([0, 1, 2, 3, r.randint(0, 7)]), r.random() < .3, r.randint(0, 1)
+            if k == "josre":
+                st["target"] = r.randint(0, i)
+                if st["target"] == (i + 1) % n:
+                    st["kind"] = "nop"
 
 
 def random_data_factory(spec):

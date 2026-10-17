@@ -3,7 +3,7 @@
 
 What the compiler needs from Amaranth, and where it comes from:
   Fragment                          `amaranth.hdl` (exported; its attributes `statements` and `subfragments` are not documented)
-  Assign, Switch, Operator, Concat  the private module `amaranth.hdl._ast` (not exported by `amaranth.hdl`)
+  Assign, Switch, Operator, Concat, Slice  the private module `amaranth.hdl._ast` (not exported by `amaranth.hdl`; Slice is read for `wait pin`: `.value`, `.start`, `.stop`)
   the names of the states of an FSM `fsm_state_names()` below: `Signal.decoder` (0.5.x) or the signal's format object (0.6 development versions)
 
 Versions (python/scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
