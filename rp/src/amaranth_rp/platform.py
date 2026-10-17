@@ -16,9 +16,6 @@ the pin names. The PIO block sees 32 GPIOs at a time. The RP2040 and the A varia
 window starts at GPIO 0 or 16 (GPIOBASE, RP2350 datasheet); the compiler picks the window from the pins the design uses. The A and B variants of the RP2350
 and RP2354 are the same PIO, only the pinout differs (owner, 2026-10-17).
 """
-import os
-import sys
-
 from amaranth.build import Platform, Pins, Resource
 from amaranth.build.run import BuildPlan
 from amaranth.hdl import ClockDomain, Signal
@@ -145,8 +142,8 @@ class _RPPioPlatform(Platform):
         return plan.execute_local(build_dir)
 
     def prepare(self, elaboratable, name="top", project="pio", **kwargs):
-        from pio_compile import compile_design
-        from pio_project import write_project
+        from .compile import compile_design
+        from .project import write_project
         compiled = compile_design(elaboratable, self, name)
         plan = BuildPlan(script="build_" + name)
         write_project(plan, compiled, self, name, project, elaboratable=elaboratable, **kwargs)

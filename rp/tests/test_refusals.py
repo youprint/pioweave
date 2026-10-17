@@ -7,15 +7,12 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for p in (os.path.abspath(os.path.join(HERE, "..")), HERE):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
-from pio_compile import PioCompileError, compile_design  # noqa: E402
-from platform_rp import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
+from amaranth_rp.compile import PioCompileError, compile_design  # noqa: E402
+from amaranth_rp.platform import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
 
 
 class Dyn(Elaboratable):

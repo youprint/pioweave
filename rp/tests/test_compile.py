@@ -11,19 +11,16 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for p in (os.path.abspath(os.path.join(HERE, "..")), HERE):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
-import pio_cosim  # noqa: E402
-import pio_designs  # noqa: E402
-from pio_compile import PioCompileError, compile_design  # noqa: E402
-from platform_rp import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform, RP2354PioPlatform  # noqa: E402
+import cosim  # noqa: E402
+from amaranth_rp import designs as pio_designs  # noqa: E402
+from amaranth_rp.compile import PioCompileError, compile_design  # noqa: E402
+from amaranth_rp.platform import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform, RP2354PioPlatform  # noqa: E402
 
-BW, PIOASM = pio_cosim.find_bitweave(), pio_cosim.find_pioasm()
+BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
 
 
@@ -39,8 +36,8 @@ def test_examples_match_the_pio_simulator(name):
     cls, chip, stim, cycles = pio_designs.PROGRAMS[name]
     factory = lambda: (cls(), PLATFORMS[chip]())  # noqa: E731
     compiled = compile_factory(factory, name)
-    a = pio_cosim.amaranth_waves(factory, cycles, stim)
-    b = pio_cosim.pio_waves(compiled, cycles, stim)
+    a = cosim.amaranth_waves(factory, cycles, stim)
+    b = cosim.pio_waves(compiled, cycles, stim)
     assert a == b
     assert any("1" in w for w in a.values()), "the example should drive something"
 
@@ -120,7 +117,7 @@ def test_gpio_window_selection_per_variant():
 
 
 def test_variants_are_the_same_pio_with_different_pinouts():
-    from platform_rp import RP2350APioPlatform, RP2350BPioPlatform, RP2354APioPlatform, RP2354BPioPlatform
+    from amaranth_rp.platform import RP2350APioPlatform, RP2350BPioPlatform, RP2354APioPlatform, RP2354BPioPlatform
     for cls, chip, count, bases in ((RP2350APioPlatform, "rp2350a", 30, (0,)), (RP2350BPioPlatform, "rp2350b", 48, (0, 16)),
                                     (RP2354APioPlatform, "rp2354a", 30, (0,)), (RP2354BPioPlatform, "rp2354b", 48, (0, 16))):
         pl = cls()
@@ -137,12 +134,12 @@ N = int(os.environ.get("PIO_COSIM_N", "15"))
 @needs_tools
 @pytest.mark.parametrize("seed", range(N))
 def test_random_designs_match_the_pio_simulator(seed):
-    spec = pio_cosim.random_spec(seed)
-    factory = pio_cosim.random_factory(spec)
+    spec = cosim.random_spec(seed)
+    factory = cosim.random_factory(spec)
     compiled = compile_factory(factory, "rnd")
     cycles = 160
-    a = pio_cosim.amaranth_waves(factory, cycles, spec["stim"])
-    b = pio_cosim.pio_waves(compiled, cycles, spec["stim"])
+    a = cosim.amaranth_waves(factory, cycles, spec["stim"])
+    b = cosim.pio_waves(compiled, cycles, spec["stim"])
     undriven = {g: w for g, w in a.items() if g not in b}
     assert all(set(w) <= {"0"} for w in undriven.values()), "a pin the program never drives changed in the Amaranth simulation"
     a = {g: w for g, w in a.items() if g in b}
@@ -167,8 +164,8 @@ def _cosim(body, chip="rp2040", cycles=120, stim=None, resources=()):
         pl.add_resources(list(resources))
         return _Dyn(body), pl
     compiled = compile_factory(factory, "t")
-    a = pio_cosim.amaranth_waves(factory, cycles, stim)
-    b = pio_cosim.pio_waves(compiled, cycles, stim)
+    a = cosim.amaranth_waves(factory, cycles, stim)
+    b = cosim.pio_waves(compiled, cycles, stim)
     assert {g: w for g, w in a.items() if g in b} == b
     return compiled, b
 
@@ -323,7 +320,7 @@ def test_program_order_is_the_definition_order_not_amarans_state_numbers():
                 c()
             with m.State("B"):
                 b()
-    with pytest.raises(PioCompileError, match=r"test_pio_compile\.py:\d+: a state that changes a pin and then jumps"):
+    with pytest.raises(PioCompileError, match=r"test_compile\.py:\d+: a state that changes a pin and then jumps"):
         compile_factory(lambda: (_Dyn(refused), RP2040PioPlatform()))
 
 

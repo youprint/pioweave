@@ -1,7 +1,7 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
 """Example PIO programs written with pioprog.py. Each equals the hand-written .pio of the same name in
-tests/pio_ref/ word for word (tests/test_pioprog.py). Simulation cases for them are in bitweave.toml ([pio.*_dsl])."""
-from pioprog import PINS, ISR, X, NULL, Program, X_DEC
+tests/pio_ref/ word for word (tests/test_program.py). Simulation cases for them are in examples/pio/bitweave.toml ([pio.*_py])."""
+from .program import PINS, ISR, X, NULL, Program, X_DEC
 
 
 def square(chip="rp2040"):

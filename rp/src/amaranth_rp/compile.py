@@ -24,14 +24,13 @@ logic outside the FSM, combinational logic, several FSMs, submodules, wide const
 """
 import os
 import re
-import sys
 
 from amaranth.hdl import Const, Signal
-from amaranth.hdl import _ast as ast
-from amaranth.hdl._ir import Fragment
 from amaranth.lib import io
 
-from pioprog import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)  # noqa: E402
+from amaranth_rp_builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
+
+from ._compat import Fragment, ast
 
 MAX_SIDE_BITS = 4      # with the enable bit of an optional side-set (5 bits shared with the delay)
 

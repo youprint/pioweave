@@ -12,18 +12,15 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for p in (os.path.abspath(os.path.join(HERE, "..")), HERE):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-import pio_cosim  # noqa: E402
-import pio_designs  # noqa: E402
-from pio_project import PioProjectError, find_pioasm  # noqa: E402
-from platform_rp import PLATFORMS  # noqa: E402
+import cosim  # noqa: E402
+from amaranth_rp import designs as pio_designs  # noqa: E402
+from amaranth_rp.project import PioProjectError, find_pioasm  # noqa: E402
+from amaranth_rp.platform import PLATFORMS  # noqa: E402
 
-BW, PIOASM = pio_cosim.find_bitweave(), pio_cosim.find_pioasm()
+BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
-BITWEAVE_REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+BITWEAVE_REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 SDK = os.path.join(BITWEAVE_REPO, ".tools", "src", "pico-sdk")
 TOOLCHAIN = os.path.join(BITWEAVE_REPO, ".tools", "arm", "usr", "bin")
 
@@ -110,7 +107,7 @@ def test_micropython_project_files(tmp_path):
 def test_micropython_needs_pioasm(tmp_path, monkeypatch):
     monkeypatch.setenv("PIOASM", str(tmp_path / "missing"))
     monkeypatch.setenv("PATH", "/nonexistent")
-    import pio_project
+    from amaranth_rp import project as pio_project
     monkeypatch.setattr(pio_project.os.path, "exists", lambda p: False)
     with pytest.raises(PioProjectError, match="needs pioasm"):
         build(tmp_path, "square_wave", "micropython")

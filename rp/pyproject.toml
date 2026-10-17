@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amaranth-rp"
+version = "0.1.0"
+description = "Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354: compile an Amaranth FSM to PIO and write the project"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["amaranth>=0.5.10,<0.6", "amaranth-rp-builder==0.1.0"]
+license = { text = "Proprietary" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+amaranth_rp = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -18,11 +18,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from amaranth.hdl import ClockDomain, Module
-from amaranth.hdl._ir import Fragment
 from amaranth.sim import Simulator
+
+from ._compat import Fragment
 
 
 class PioProjectError(Exception):
@@ -30,7 +32,8 @@ class PioProjectError(Exception):
 
 
 def find_pioasm():
-    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".tools", "bin", "pioasm")):
+    """pioasm: the PIOASM environment variable, the PATH, or next to the running Python (bitweave puts it in the bin directory of its tools environment)."""
+    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pioasm")):
         if c and os.path.exists(c):
             return os.path.abspath(c)
     return None

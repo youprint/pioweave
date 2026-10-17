@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amaranth-rp-builder"
+version = "0.1.0"
+description = "Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (pioasm text and an independent encoder)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+license = { text = "Proprietary" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+amaranth_rp_builder = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

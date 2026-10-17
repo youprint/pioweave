@@ -1,7 +1,8 @@
 # Study: a Python / Amaranth package for the PIO tooling
 
 Question (owner, 2026-10-17): can the PIO tooling become a proper Python Amaranth module, and how would it be structured? This note records how Amaranth packages are
-built, three things "module" can mean, five proposals, and a recommendation. Nothing in it is implemented yet.
+built, three things "module" can mean, five proposals, and a recommendation. Decision (owner, 2026-10-17): P2 (two packages) with P4 (local install), named amaranth-rp-builder and amaranth-rp, no boards package now, `bitweave install rp-pio`
+allowed. The MCP server and the Rust flows keep the name Bitweave. Implemented 2026-10-17; the rest of this note is the study that led to it.
 
 ## 1. How Amaranth packages are structured (read from the installed 0.5.10 and from amaranth-boards 0.0.21)
 

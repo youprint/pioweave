@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Tests of pioprog.py and pio_examples.py.
+"""Tests of program.py and examples.py.
 
 The main check: the DSL encodes every instruction form itself, from the datasheet tables, and the real pioasm assembles the text the DSL
 prints; the two must give identical words. The tests that need pioasm are skipped when it is not found (set PIOASM, or put it on the PATH,
@@ -15,14 +15,13 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))
-import pio_examples  # noqa: E402
-from pioprog import (ALWAYS, CLEAR, EXEC, INVERT, ISR, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PC, PIN, PINDIRS, PINS, REVERSE, SET, STATUS, WAIT, X, X_DEC,  # noqa: E402
+from amaranth_rp_builder import examples as pio_examples
+from amaranth_rp_builder.program import (ALWAYS, CLEAR, EXEC, INVERT, ISR, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PC, PIN, PINDIRS, PINS, REVERSE, SET, STATUS, WAIT, X, X_DEC,  # noqa: E402
                      X_NE_Y, Y, Y_DEC, NONE, PioError, Program, write_pio)
 
 
 def find_pioasm():
-    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(HERE, "..", "..", ".tools", "bin", "pioasm")):
+    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(HERE, "..", "..", "..", ".tools", "bin", "pioasm")):
         if c and os.path.exists(c):
             return c
     return None
@@ -308,16 +307,16 @@ def test_write_pio_holds_several_programs(tmp_path):
 
 
 def test_emit_script_prints_the_generator_line(tmp_path):
-    r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "bitweave_pio_emit.py"), "square", str(tmp_path)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit", "square", str(tmp_path)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     line = [l for l in r.stdout.splitlines() if l.startswith("EMIT ")][-1]
     path = json.loads(line[5:])["path"]
     with open(path) as fh:
         assert fh.read() == pio_examples.square().pio_text()
     for bad in (["nope", str(tmp_path)], []):
-        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "bitweave_pio_emit.py")] + bad, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit"] + bad, capture_output=True, text=True)
         assert r.returncode != 0
-    r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "bitweave_pio_emit.py"), "uart_tx", str(tmp_path), "rp2040"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit", "uart_tx", str(tmp_path), "rp2040"], capture_output=True, text=True)
     assert r.returncode == 0 and "uart_tx.pio" in r.stdout
 
 

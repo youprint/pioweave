@@ -20,20 +20,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def find_bitweave():
-    for c in (os.environ.get("BITWEAVE"), shutil.which("bitweave"), os.path.join(HERE, "..", "..", "target", "release", "bitweave")):
+    for c in (os.environ.get("BITWEAVE"), shutil.which("bitweave"), os.path.join(HERE, "..", "..", "..", "target", "release", "bitweave")):
         if c and os.path.exists(c):
             return os.path.abspath(c)
     return None
 
 
 def find_pioasm():
-    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(HERE, "..", "..", ".tools", "bin", "pioasm")):
+    for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(HERE, "..", "..", "..", ".tools", "bin", "pioasm")):
         if c and os.path.exists(c):
             return os.path.abspath(c)
     return None
 
 
-from pio_project import amaranth_waves  # noqa: E402,F401  (the reference simulation lives next to the project writers)
+from amaranth_rp.project import amaranth_waves  # noqa: E402,F401  (the reference simulation lives next to the project writers)
 
 
 def pio_waves(compiled, cycles, stim=None, extra=None):
@@ -204,7 +204,7 @@ def random_spec(seed):
 
 
 def random_factory(spec):
-    from platform_rp import PLATFORMS
+    from amaranth_rp.platform import PLATFORMS
 
     def factory():
         pl = PLATFORMS[spec["chip"]]()
