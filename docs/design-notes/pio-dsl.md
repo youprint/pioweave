@@ -1,6 +1,6 @@
 # PIO programs in Python (Amaranth style): design note
 
-Code: builder/src/pioweave.builder/program.py, builder/src/pioweave.builder/examples.py and `python -m pioweave.builder emit`. Tests: builder/tests/test_program.py.
+Code: pioweave/builder/program.py, pioweave/builder/examples.py and `python -m pioweave.builder emit`. Tests: builder/tests/test_program.py.
 
 ## 1. What this is and is not
 
@@ -8,7 +8,7 @@ Code: builder/src/pioweave.builder/program.py, builder/src/pioweave.builder/exam
 - It is not an FPGA design and not an Amaranth module: the PIO block of a chip is not reachable from Amaranth. A PIO-compatible state machine in Amaranth for an FPGA is a separate idea, not built here.
 - The RP2354 is an RP2350 with 2 MB of flash in the package (owner, 2026-10-17); the DSL treats it as an RP2350 (PIO version 1).
 
-## 2. API (builder/src/pioweave.builder/program.py)
+## 2. API (pioweave/builder/program.py)
 
     p = Program("uart_tx", chip="rp2350", side_set=1, side_opt=True)
     p.pull(side=1, delay=7)
@@ -45,7 +45,7 @@ Rules that the datasheets do not state and that were found by comparing with the
 
 ## 4. Two independent encoders
 
-`words()` encodes from the datasheet tables; pioasm encodes from its own source. The test assembles the text the DSL prints and compares word for word: 10,681 instruction words in 351 programs (RP2040 and RP2350 forms, every operand combination of every instruction, five side-set configurations, delay and side values at their limits) are equal. Version-1-only forms are also refused by pioasm for version 0, as the DSL does. The three example programs equal the hand-written .pio files (pioweave/tests/pio_ref/) in words, wrap range, side-set and version.
+`words()` encodes from the datasheet tables; pioasm encodes from its own source. The test assembles the text the DSL prints and compares word for word: 10,681 instruction words in 351 programs (RP2040 and RP2350 forms, every operand combination of every instruction, five side-set configurations, delay and side values at their limits) are equal. Version-1-only forms are also refused by pioasm for version 0, as the DSL does. The three example programs equal the hand-written .pio files (tests/pio_ref/) in words, wrap range, side-set and version.
 
 ## 5. Use with bitweave
 

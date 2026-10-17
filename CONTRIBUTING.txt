@@ -1,0 +1,16 @@
+CONTRIBUTIONS and CODE REVIEWS
+
+pioweave is a private, proprietary project of its owner. It is developed in the open style of the Amaranth packages (a flat package directory, tests/, docs/, a pyproject.toml)
+so that it can be installed and used like them, but contributions are accepted only from the owner for now.
+
+
+USE OF LARGE LANGUAGE MODELS / "GENERATIVE AI" TOOLS
+
+The code, tests and documentation of this repository were written with the help of an AI coding assistant (Claude), under the owner's direction and review. Every behaviour is
+checked by tests; claims about hardware are marked [verify] until they have been checked on a chip. The Amaranth project does not accept such contributions into its own
+repositories; this repository is not part of them.
+
+
+COPYRIGHTS and LICENSE
+
+See LICENSE.txt. No third-party code is copied; instruction encodings and behaviour come from the RP2040 and RP2350 datasheets.

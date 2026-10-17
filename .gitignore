@@ -1,6 +1,18 @@
+# Python
 __pycache__/
-*.egg-info/
+*.egg-info
+/dist
+/build
 .pytest_cache/
-build/
-dist/
-.venv/
+
+# environments
+/.venv
+
+# coverage
+/.coverage
+/htmlcov
+
+# tests and docs
+*.vcd
+*.gtkw
+/docs/_build

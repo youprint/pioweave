@@ -1,0 +1,646 @@
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+"""An emulator for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354, in Python.
+
+One `PioBlock` has a shared 32-word instruction memory, four state machines, the eight IRQ flags and the GPIO side of the block (levels, directions, inputs). It executes
+the instruction set cycle by cycle as the datasheets describe it (RP2040 datasheet chapter 3, RP2350 datasheet chapter 11): stalls, delays, side-set (applied in the first
+cycle of an instruction, after its own pin write), wrapping, autopush and autopull with thresholds, PUSH IFFULL / PULL IFEMPTY, the FIFO joins, EXEC, forced instructions,
+IRQ flags (set wins over clear in the same cycle), and on PIO version 1 the extra instructions (WAIT JMPPIN, MOV PINDIRS, MOV to and from the RX FIFO registers, IRQ PREV / NEXT
+for several blocks through `PioBlock.neighbours`, IN with a count, MOV status from the IRQ flags).
+
+    block = PioBlock(version=0)
+    loaded = block.load(program)                    # a pioweave.builder.Program, or `load(words, side=...)`
+    sm = block.sm[0]
+    sm.configure(program=loaded, set_base=0, set_count=1, clkdiv=1)
+    sm.enable()                                     # a state machine runs only when enabled
+    sm.put(0x55)                                    # a word into the TX FIFO
+    block.run(100)                                  # 100 system clock cycles
+    sm.get()                                        # a word out of the RX FIFO, or None
+
+Facts marked [verify] come from the datasheets as recalled and have not been checked against a chip. Nothing here has run on a chip; the emulator is checked against the PIO
+simulator of bitweave (tests/test_emulator_differential.py) and against the Amaranth designs of pioweave (tests/test_compile.py).
+"""
+from collections import deque
+
+MASK32 = 0xFFFFFFFF
+
+
+def _mask(n):
+    return MASK32 if n >= 32 else (1 << n) - 1
+
+
+class EmulationError(Exception):
+    """The program does something the hardware leaves undefined or reserved, or reads empty instruction memory."""
+
+
+class Fifo:
+    def __init__(self, depth):
+        self.depth = depth
+        self.q = deque()
+
+    def __len__(self):
+        return len(self.q)
+
+    def full(self):
+        return len(self.q) >= self.depth
+
+    def push(self, word):
+        if self.full():
+            return False
+        self.q.append(word & MASK32)
+        return True
+
+    def pop(self):
+        return self.q.popleft() if self.q else None
+
+
+class Config:
+    """The configuration of one state machine, with the names of the registers it comes from."""
+    __slots__ = ("in_base", "in_count", "out_base", "out_count", "set_base", "set_count", "side_base", "jmp_pin", "in_right", "out_right", "autopush", "autopull", "push_thresh",
+                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass")
+
+    def __init__(self):
+        self.in_base = self.out_base = self.set_base = self.side_base = self.jmp_pin = 0
+        self.in_count = 32
+        self.out_count = self.set_count = 0
+        self.in_right = self.out_right = True            # the reset value of the shift directions is right (SHIFTCTRL, RP2040 datasheet 3.7) [verify]
+        self.autopush = self.autopull = False
+        self.push_thresh = self.pull_thresh = 32
+        self.wrap_bottom, self.wrap_top = 0, 31
+        self.side_bits, self.side_opt, self.side_pindirs = 0, False, False
+        self.status_sel, self.status_n = "tx", 0
+        self.fifo_join = "none"                          # none, tx, rx; version 1 also rx_put, rx_get, rx_put_get
+        self.clkdiv = 1.0
+        self.sync_bypass = False
+
+
+class StateMachine:
+    def __init__(self, block, index):
+        self.block, self.index = block, index
+        self.cfg = Config()
+        self.reset()
+
+    # ------------------------------------------------------------------ host side
+    def reset(self):
+        """Restart the state machine (SM restart and clock divider restart): registers cleared, OSR empty, FIFOs emptied, PC at the wrap bottom is not implied: set_pc()."""
+        self.pc = 0
+        self.x = self.y = 0
+        self.isr = self.osr = 0
+        self.isr_count, self.osr_count = 0, 32
+        self.tx, self.rx = Fifo(4), Fifo(4)
+        self.rx_regs = [0, 0, 0, 0]
+        self.delay_left = 0
+        self.side_done = False
+        self.in_shifted = False
+        self.irq_set_done = False
+        self.exec_word = None
+        self.cur_forced = None
+        self.acc = 0                                      # clock divider accumulator, in 1/256 of a system clock
+        self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
+        self.executed = self.stall_cycles = self.delay_cycles = 0
+        self.rx_lost = self.tx_dropped = 0
+        self.last = ("-", 0, 0)
+        self._apply_join()
+
+    def _apply_join(self):
+        """FIFO depths (TX, RX): 4 and 4; joined to 8 and 0 or 0 and 8; with the RX FIFO registers of PIO version 1 the TX FIFO keeps four words and the RX storage is four registers [verify]."""
+        self.tx.depth, self.rx.depth = {"none": (4, 4), "tx": (8, 0), "rx": (0, 8), "rx_put": (4, 0), "rx_get": (4, 0), "rx_put_get": (4, 0)}[self.cfg.fifo_join]
+
+    def configure(self, program=None, **kw):
+        """Set the configuration. `program`: what `PioBlock.load()` returned (wrap range and side-set are taken from it and the PC is set to its start). Keywords: in_base, in_count,
+        out_base, out_count, set_base, set_count, side_base, jmp_pin, in_shift / out_shift ("right" or "left"), autopush, autopull, push_thresh, pull_thresh, status_sel,
+        status_n, fifo_join, clkdiv, sync_bypass, side_bits, side_opt, side_pindirs, wrap_bottom, wrap_top (absolute addresses)."""
+        c = self.cfg
+        if program is not None:
+            if not isinstance(program, Loaded):
+                raise TypeError("program must be what PioBlock.load() returned")
+            c.wrap_bottom, c.wrap_top = program.offset + program.wrap_target, program.offset + program.wrap
+            c.side_bits, c.side_opt, c.side_pindirs = program.side_bits, program.side_opt, program.side_pindirs
+            self.pc = program.offset
+        for key, val in kw.items():
+            if key in ("in_shift", "out_shift"):
+                if val not in ("left", "right"):
+                    raise ValueError("%s is 'left' or 'right'" % key)
+                setattr(c, key.replace("shift", "right"), val == "right")
+            elif key in Config.__slots__:
+                setattr(c, key, val)
+            else:
+                raise TypeError("unknown configuration %r" % key)
+        for key in ("push_thresh", "pull_thresh"):
+            v = getattr(c, key)
+            if not 1 <= v <= 32:
+                raise ValueError("%s must be 1..32" % key)
+        if c.fifo_join not in ("none", "tx", "rx", "rx_put", "rx_get", "rx_put_get"):
+            raise ValueError("fifo_join: none, tx, rx, rx_put, rx_get or rx_put_get")
+        if c.fifo_join in ("rx_put", "rx_get", "rx_put_get") and self.block.version < 1:
+            raise ValueError("the RX FIFO register join is a PIO version 1 feature")
+        if c.autopush and c.fifo_join in ("rx_put", "rx_get", "rx_put_get"):
+            raise ValueError("autopush must not be enabled with an RX FIFO PUT / GET join (undefined)")
+        self._apply_join()
+        return self
+
+    def enable(self):
+        """Start the state machine (SM_ENABLE)."""
+        self.enabled = True
+        return self
+
+    def disable(self):
+        self.enabled = False
+        return self
+
+    def set_pc(self, address):
+        self.pc = address & 31
+        return self
+
+    def put(self, word):
+        """Write the TX FIFO as the host does; False (and counted in `tx_dropped`) when it is full."""
+        if self.tx.push(word):
+            return True
+        self.tx_dropped += 1
+        return False
+
+    def get(self):
+        """Read the RX FIFO as the host does: the oldest word, or None when it is empty."""
+        return self.rx.pop()
+
+    def force(self, word):
+        """Execute `word` in the next cycle instead of the program (SMx_INSTR). It runs with its side-set and stalls like any instruction; the delay is applied [verify]."""
+        self.cur_forced = word & 0xFFFF
+        return self
+
+    # ------------------------------------------------------------------ helpers
+    def _in_pins(self, view):
+        n = self.cfg.in_base & 31
+        v = ((view >> n) | (view << (32 - n))) & MASK32 if n else view
+        return (v & _mask(self.cfg.in_count)) if self.block.version >= 1 else v
+
+    def _flag(self, idx):
+        flag = idx & 7
+        if self.block.version == 0:
+            return (flag & 4) | ((flag + self.index) & 3) if idx & 0x10 else flag, 0
+        mode = (idx >> 3) & 3
+        if mode == 0:
+            return flag, 0
+        if mode == 2:
+            return (flag & 4) | ((flag + self.index) & 3), 0
+        return flag, 1 if mode == 3 else -1               # 1: NEXT block, -1: PREV block (the neighbour blocks, see PioBlock.neighbours)
+
+    def _shift_in(self, data, n):
+        d = data & _mask(n)
+        if self.cfg.in_right:
+            self.isr = ((self.isr >> n) | (d << (32 - n))) & MASK32
+        else:
+            self.isr = ((self.isr << n) | d) & MASK32
+        self.isr_count = min(self.isr_count + n, 32)
+
+    def _shift_out(self, n):
+        if self.cfg.out_right:
+            data, rest = self.osr & _mask(n), self.osr >> n
+        else:
+            data, rest = (self.osr >> (32 - n)) & _mask(n), (self.osr << n) & MASK32
+        self.osr = rest & MASK32
+        self.osr_count = min(self.osr_count + n, 32)
+        return data
+
+    def _status(self):
+        c = self.cfg
+        if c.status_sel == "irq":
+            on = bool(self.block.irq & (1 << (c.status_n & 7)))
+        elif c.status_sel == "rx":
+            on = len(self.rx) < c.status_n
+        else:
+            on = len(self.tx) < c.status_n
+        return MASK32 if on else 0
+
+    def _background_pull(self):
+        c = self.cfg
+        if c.autopull and self.osr_count >= c.pull_thresh and len(self.tx):
+            self.osr, self.osr_count = self.tx.pop(), 0
+
+    def _write(self, stage, base, count, value, dirs=False):
+        for j in range(min(count, 32)):
+            stage.append((dirs, (base + j) & 31, (value >> j) & 1))
+
+    def _side_set(self, word, stage):
+        c = self.cfg
+        n = c.side_bits
+        if n == 0:
+            return
+        field = (word >> 8) & 0x1F
+        delay_bits = max(5 - n, 0)
+        if c.side_opt:
+            value_bits, enabled = n - 1, bool((field >> 4) & 1)
+        else:
+            value_bits, enabled = n, True
+        if not enabled:
+            return
+        self._write(stage, c.side_base, value_bits, (field >> delay_bits) & _mask(value_bits), c.side_pindirs)
+
+    def _delay_of(self, word):
+        return ((word >> 8) & 0x1F) & _mask(max(5 - self.cfg.side_bits, 0))
+
+    # ------------------------------------------------------------------ one instruction
+    def _exec(self, word, view, ctx):
+        """Execute one word. Returns (status, jump) with status 'done' or 'stall'; pin writes go to ctx.writes, IRQ changes to ctx.irq_set / ctx.irq_clear."""
+        c, blk = self.cfg, self.block
+        first = not self.side_done
+        op, a = word >> 13, word & 0xFF
+        is_out = False
+        jump = None
+        res = "done"
+        if op == 0:                                                          # JMP
+            addr, cond = a & 31, (a >> 5) & 7
+            if cond == 0:
+                taken = True
+            elif cond == 1:
+                taken = self.x == 0
+            elif cond == 2:
+                taken = self.x != 0
+                self.x = (self.x - 1) & MASK32
+            elif cond == 3:
+                taken = self.y == 0
+            elif cond == 4:
+                taken = self.y != 0
+                self.y = (self.y - 1) & MASK32
+            elif cond == 5:
+                taken = self.x != self.y
+            elif cond == 6:
+                taken = bool((view >> (c.jmp_pin & 31)) & 1)
+            else:
+                taken = self.osr_count < c.pull_thresh
+            jump = addr if taken else None
+        elif op == 1:                                                        # WAIT
+            pol, src, idx = (a >> 7) & 1, (a >> 5) & 3, a & 31
+            if src == 0:
+                level = (view >> idx) & 1
+            elif src == 1:
+                level = (self._in_pins(view) >> idx) & 1
+            elif src == 2:
+                f, other = self._flag(idx)
+                if other:
+                    nb = blk.neighbour(other)
+                    if nb is None:
+                        raise EmulationError("IRQ PREV / NEXT refers to another PIO block that is not part of this emulation")
+                    level = (nb.irq >> f) & 1
+                    if level == pol == 1:
+                        ctx.irq_clear_other.append((nb, f))
+                else:
+                    level = (blk.irq >> f) & 1
+                    if level == pol == 1:
+                        ctx.irq_clear.add(f)
+            else:
+                if blk.version == 0:
+                    raise EmulationError("WAIT source 11 is reserved on PIO version 0")
+                if idx > 3:
+                    raise EmulationError("WAIT JMPPIN index above 3 is reserved")
+                level = (view >> ((c.jmp_pin + idx) & 31)) & 1
+            res = "done" if level == pol else "stall"
+        elif op == 2:                                                        # IN
+            n = 32 if a & 31 == 0 else a & 31
+            if not self.in_shifted:
+                s = (a >> 5) & 7
+                if s == 0:
+                    data = self._in_pins(view)
+                elif s == 1:
+                    data = self.x
+                elif s == 2:
+                    data = self.y
+                elif s == 3:
+                    data = 0
+                elif s == 6:
+                    data = self.isr
+                elif s == 7:
+                    data = self.osr
+                else:
+                    raise EmulationError("IN source 100 / 101 is reserved")
+                self._shift_in(data, n)
+                self.in_shifted = True
+            if c.autopush and self.isr_count >= c.push_thresh:
+                if not self.rx.full():
+                    self.rx.push(self.isr)
+                    self.isr, self.isr_count, self.in_shifted = 0, 0, False
+                else:
+                    res = "stall"
+            else:
+                self.in_shifted = False
+        elif op == 3:                                                        # OUT
+            is_out = True
+            n = 32 if a & 31 == 0 else a & 31
+            if c.autopull and self.osr_count >= c.pull_thresh:
+                if len(self.tx):
+                    self.osr, self.osr_count = self.tx.pop(), 0
+                res = "stall"
+            else:
+                data = self._shift_out(n)
+                d = (a >> 5) & 7
+                if d == 0:
+                    self._write(ctx.writes, c.out_base, c.out_count, data)
+                elif d == 1:
+                    self.x = data
+                elif d == 2:
+                    self.y = data
+                elif d == 4:
+                    self._write(ctx.writes, c.out_base, c.out_count, data, True)
+                elif d == 5:
+                    jump = data & 31
+                elif d == 6:
+                    self.isr, self.isr_count = data, n
+                elif d == 7:
+                    self.exec_word = data & 0xFFFF
+                self._background_pull()
+        elif op == 4:                                                        # PUSH / PULL (and MOV to / from the RX FIFO registers on version 1)
+            if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0 and not word & 4:
+                idx = (word & 3) if word & 8 else (self.y & 3)
+                if not word & 0x80:
+                    if c.fifo_join not in ("rx_put", "rx_put_get"):
+                        raise EmulationError("MOV rxfifo[..], isr needs fifo_join = rx_put or rx_put_get (undefined otherwise)")
+                    self.rx_regs[idx] = self.isr
+                else:
+                    if c.fifo_join not in ("rx_get", "rx_put_get"):
+                        raise EmulationError("MOV osr, rxfifo[..] needs fifo_join = rx_get or rx_put_get (undefined otherwise)")
+                    self.osr, self.osr_count = self.rx_regs[idx], 0
+            elif c.fifo_join in ("rx_put", "rx_get", "rx_put_get"):
+                raise EmulationError("PUSH / PULL are undefined while an RX FIFO PUT / GET join is active")
+            elif not word & 0x80:                                            # PUSH
+                iff, blk_ = bool((a >> 6) & 1), bool((a >> 5) & 1)
+                if iff and self.isr_count < c.push_thresh:
+                    pass
+                elif not self.rx.full():
+                    self.rx.push(self.isr)
+                    self.isr, self.isr_count = 0, 0
+                elif blk_:
+                    res = "stall"
+                else:
+                    self.isr, self.isr_count = 0, 0
+                    self.rx_lost += 1
+            else:                                                            # PULL
+                ife, blk_ = bool((a >> 6) & 1), bool((a >> 5) & 1)
+                if (c.autopull and self.osr_count == 0) or (ife and self.osr_count < c.pull_thresh):
+                    pass
+                elif len(self.tx):
+                    self.osr, self.osr_count = self.tx.pop(), 0
+                elif blk_:
+                    res = "stall"
+                else:
+                    self.osr, self.osr_count = self.x, 0
+        elif op == 5:                                                        # MOV
+            s = a & 7
+            if s == 0:
+                src = self._in_pins(view)
+            elif s == 1:
+                src = self.x
+            elif s == 2:
+                src = self.y
+            elif s == 3:
+                src = 0
+            elif s == 5:
+                src = self._status()
+            elif s == 6:
+                src = self.isr
+            elif s == 7:
+                src = self.osr
+            else:
+                raise EmulationError("MOV source 100 is reserved")
+            o = (a >> 3) & 3
+            if o == 0:
+                val = src
+            elif o == 1:
+                val = ~src & MASK32
+            elif o == 2:
+                val = int(format(src, "032b")[::-1], 2)
+            else:
+                raise EmulationError("MOV operation 11 is reserved")
+            d = (a >> 5) & 7
+            if d == 0:
+                self._write(ctx.writes, c.out_base, c.out_count, val)
+            elif d == 1:
+                self.x = val
+            elif d == 2:
+                self.y = val
+            elif d == 3:
+                if blk.version == 0:
+                    raise EmulationError("MOV PINDIRS is not supported on PIO version 0")
+                self._write(ctx.writes, c.out_base, c.out_count, val, True)
+            elif d == 4:
+                self.exec_word = val & 0xFFFF
+            elif d == 5:
+                jump = val & 31
+            elif d == 6:
+                self.isr, self.isr_count = val, 0
+            else:
+                self.osr, self.osr_count = val, 0
+        elif op == 6:                                                        # IRQ
+            clr, wait = bool((a >> 6) & 1), bool((a >> 5) & 1)
+            f, other = self._flag(a & 31)
+            if other:
+                nb = blk.neighbour(other)
+                if nb is None:
+                    raise EmulationError("IRQ PREV / NEXT refers to another PIO block that is not part of this emulation")
+                flags, set_, clear = nb.irq, (lambda fl, nb=nb: ctx.irq_set_other.append((nb, fl))), (lambda fl, nb=nb: ctx.irq_clear_other.append((nb, fl)))
+            else:
+                flags, set_, clear = blk.irq, ctx.irq_set.add, ctx.irq_clear.add
+            if clr:
+                clear(f)
+            else:
+                just_set = not self.irq_set_done
+                if just_set:
+                    set_(f)
+                    self.irq_set_done = True
+                if wait and (just_set or (flags >> f) & 1):      # IRQ WAIT: stall until the flag has been cleared (by another state machine or the host)
+                    res = "stall"
+                else:
+                    self.irq_set_done = False
+        else:                                                                # SET
+            data, d = a & 31, (a >> 5) & 7
+            if d == 0:
+                self._write(ctx.writes, c.set_base, c.set_count, data)
+            elif d == 1:
+                self.x = data
+            elif d == 2:
+                self.y = data
+            elif d == 4:
+                self._write(ctx.writes, c.set_base, c.set_count, data, True)
+            else:
+                raise EmulationError("SET destination %s is reserved" % format(d, "03b"))
+        if first:
+            self._side_set(word, ctx.writes)
+            self.side_done = True
+        return res, jump, is_out
+
+    def _step(self, view, ctx):
+        """One state machine clock cycle."""
+        c, blk = self.cfg, self.block
+        if self.delay_left > 0:
+            self.delay_left -= 1
+            self.delay_cycles += 1
+            self.last = ("d", 0, self.pc)
+            self._background_pull()
+            return
+        forced = self.cur_forced is not None or self.exec_word is not None
+        if self.cur_forced is not None:
+            word, self.cur_forced = self.cur_forced, None
+        elif self.exec_word is not None:
+            word, self.exec_word = self.exec_word, None
+        else:
+            word = blk.mem[self.pc & 31]
+            if word is None:
+                raise EmulationError("state machine %d: pc %d executes empty instruction memory" % (self.index, self.pc))
+        pc_before = self.pc
+        res, jump, is_out = self._exec(word, view, ctx)
+        self.last = ("s" if res == "stall" else ("f" if forced else "e"), word, pc_before)
+        if res == "stall":
+            self.stall_cycles += 1
+            if forced:
+                self.cur_forced = word
+        else:
+            self.executed += 1
+            self.side_done = False
+            self.delay_left = 0 if self.exec_word is not None else self._delay_of(word)    # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies
+            if jump is not None:
+                self.pc = jump & 31
+            elif not forced:
+                self.pc = c.wrap_bottom if self.pc == c.wrap_top else (self.pc + 1) & 31
+        if not is_out:
+            self._background_pull()
+
+    def _clock_enable(self):
+        """The fractional clock divider: True in the system clock cycles in which the state machine advances (average rate 1 / clkdiv) [verify the jitter pattern]."""
+        div = max(int(round(self.cfg.clkdiv * 256)), 256)
+        self.acc += 256
+        if self.acc >= div:
+            self.acc -= div
+            return True
+        return False
+
+    def snapshot(self):
+        return {"sm": self.index, "kind": self.last[0], "word": self.last[1], "pc_at": self.last[2], "pc": self.pc, "x": self.x, "y": self.y, "isr": self.isr,
+                "isr_count": self.isr_count, "osr": self.osr, "osr_count": self.osr_count, "tx": list(self.tx.q), "rx": list(self.rx.q)}
+
+
+class _Ctx:
+    """The effects of one system clock cycle that are applied together at its end."""
+
+    def __init__(self):
+        self.writes = []
+        self.irq_set, self.irq_clear = set(), set()
+        self.irq_set_other, self.irq_clear_other = [], []
+
+
+class Loaded:
+    """A program placed in the instruction memory: where it is, its wrap range and side-set (program-relative), as returned by `PioBlock.load`."""
+
+    def __init__(self, offset, length, wrap_target, wrap, side_bits, side_opt, side_pindirs):
+        self.offset, self.length, self.wrap_target, self.wrap = offset, length, wrap_target, wrap
+        self.side_bits, self.side_opt, self.side_pindirs = side_bits, side_opt, side_pindirs
+
+    def __int__(self):
+        return self.offset
+
+
+class PioBlock:
+    """One PIO block: four state machines around a shared instruction memory, the IRQ flags and the GPIO side. Pin numbers of the block are those of its 32-pin window; `gpio_base`
+    (0 or 16, RP2350B) maps them to GPIO numbers: GPIO = pin + gpio_base."""
+
+    def __init__(self, version=0, gpio_base=0, sync_cycles=2):
+        if version not in (0, 1):
+            raise ValueError("version is 0 (RP2040) or 1 (RP2350, RP2354)")
+        if gpio_base not in (0, 16) or (gpio_base and version == 0):
+            raise ValueError("gpio_base is 0, or 16 on PIO version 1 (the 48-GPIO parts)")
+        self.version, self.gpio_base = version, gpio_base
+        self.sync_cycles = sync_cycles                    # 2 = the input synchroniser of the hardware [verify]; 0 = bypass
+        self.mem = [None] * 32
+        self.irq = 0
+        self.out_level = 0
+        self.dirs = 0
+        self.ext = 0                                      # what the outside world drives, bit per pin (pins the block drives as outputs are not affected)
+        self._ext_history = [0] * (self.sync_cycles + 1)
+        self.sm = [StateMachine(self, i) for i in range(4)]
+        self.neighbours = {-1: None, 1: None}             # the PREV / NEXT block, for IRQ PREV / NEXT (PIO version 1)
+        self.cycle = 0
+        self.trace = []
+        self.recording = False
+
+    def neighbour(self, which):
+        return self.neighbours.get(which)
+
+    # ------------------------------------------------------------------ loading
+    def load(self, program, offset=None, side=None):
+        """Put a program into the instruction memory and return a `Loaded`. `program`: a pioweave.builder.Program (words, wrap and side-set are taken from it) or a list of 16-bit
+        words (then give `side=(bits, optional, pindirs)` if it uses side-set; `bits` counts the enable bit of an optional side-set, as SIDESET_COUNT does). JMP targets are program-relative as pioasm writes them and are relocated by the load offset.
+        `offset`: None = the program's .origin if it has one, else the first place with room."""
+        if hasattr(program, "words"):
+            words = program.words()
+            wrap_target, wrap = program.wrap_range
+            origin = getattr(program, "origin", None)
+            side = (program.side_count + (1 if program.side_opt and program.side_count else 0), program.side_opt, program.side_pindirs)
+        else:
+            words, origin = list(program), None
+            side = side or (0, False, False)
+            wrap_target, wrap = 0, len(words) - 1
+        n = len(words)
+        if n == 0 or n > 32:
+            raise ValueError("a program has 1 to 32 instructions")
+        if offset is None:
+            offset = origin
+        if offset is None:
+            offset = next((o for o in range(0, 33 - n) if all(self.mem[o + i] is None for i in range(n))), None)
+            if offset is None:
+                raise EmulationError("no room for %d instructions in the instruction memory" % n)
+        if offset + n > 32:
+            raise EmulationError("the program does not fit at offset %d" % offset)
+        for i, w in enumerate(words):
+            w &= 0xFFFF                                        # the builder's words() carry a flag in bit 16 for a WAIT on GPIO 32-47; the instruction is the low 16 bits
+            if w >> 13 == 0:                                   # JMP: the target is relative to the program, add the load offset
+                w = (w & ~31) | (((w & 31) + offset) & 31)
+            elif w >> 13 == 1 and (w >> 5) & 3 == 0:           # WAIT GPIO carries the low five bits of the real GPIO number; with GPIO base 16 the SDK flips bit 4 when it loads
+                w ^= self.gpio_base
+            self.mem[offset + i] = w & 0xFFFF
+        return Loaded(offset, n, wrap_target, wrap, side[0], bool(side[1]), bool(side[2]))
+
+    def unload(self, loaded):
+        for i in range(loaded.length):
+            self.mem[loaded.offset + i] = None
+
+    # ------------------------------------------------------------------ pins
+    def set_input(self, pin, level):
+        """Drive an input pin from outside (a pin of the window)."""
+        self.ext = (self.ext & ~(1 << pin)) | (int(bool(level)) << pin)
+
+    def set_inputs(self, value):
+        self.ext = value & MASK32
+
+    def pads(self):
+        """What is on the pads (the window): own outputs where the pin is an output, the outside world elsewhere."""
+        return (self.out_level & self.dirs) | (self.ext & ~self.dirs & MASK32)
+
+    # ------------------------------------------------------------------ running
+    def step(self):
+        """One system clock cycle."""
+        hist = self._ext_history
+        hist.append(self.ext)
+        ext_seen = hist[-1 - self.sync_cycles]
+        del hist[0:len(hist) - (self.sync_cycles + 1)]
+        view = (self.out_level & self.dirs) | (ext_seen & ~self.dirs & MASK32)
+        ctx = _Ctx()
+        for sm in self.sm:
+            if sm.enabled and sm._clock_enable():
+                sm._step(view, ctx)
+        # apply the effects: SM0 first, so that a higher-numbered state machine wins on a pin both write in the same cycle [verify]
+        for dirs, pin, bit in ctx.writes:
+            if dirs:
+                self.dirs = (self.dirs & ~(1 << pin)) | (bit << pin)
+            else:
+                self.out_level = (self.out_level & ~(1 << pin)) | (bit << pin)
+        self.irq &= ~sum(1 << f for f in ctx.irq_clear)
+        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 datasheet 11.2.7)
+        for nb, f in ctx.irq_clear_other:
+            nb.irq &= ~(1 << f)
+        for nb, f in ctx.irq_set_other:
+            nb.irq |= 1 << f
+        self.cycle += 1
+        if self.recording:
+            self.trace.append({"cycle": self.cycle - 1, "pads": self.pads(), "dirs": self.dirs, "irq": self.irq, "sms": [sm.snapshot() for sm in self.sm]})
+
+    def run(self, cycles):
+        for _ in range(cycles):
+            self.step()
+        return self

@@ -9,6 +9,8 @@ normally programmed in `pioasm` assembly. pioweave offers two other ways to writ
 - **In Amaranth**, as an ordinary finite state machine (`pioweave`). One FSM state is one PIO instruction, so the Amaranth simulation of your design *is* the reference for the program that is
   generated. The compiler refuses anything that would change the cycle behaviour; it never approximates.
 
+- **In an emulator**: `pioweave.emulator` is a Python model of the PIO blocks (four state machines, shared instruction memory, FIFOs, IRQ flags, pins) that runs any program cycle by cycle, without a chip.
+
 From either, pioweave writes a `.pio` file, and on request a Pico SDK C project or a MicroPython project, together with a test case for [bitweave](https://github.com/youprint/bitweave) that checks the
 compiled program against the simulation of your design.
 
@@ -65,7 +67,7 @@ s_BIT:
 Early (version 0.1.0). Everything below was checked in simulation and against the real `pioasm`; **nothing has run on a chip yet**, and the generated MicroPython code has not run on a device.
 
 - The builder's own encoder agrees with `pioasm` on 10,681 instruction words in 351 programs.
-- 450 random Amaranth designs without and 250 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all ten example designs.
+- 450 random Amaranth designs without and 250 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all ten example designs; the Python emulator agrees with the Amaranth simulation on the same designs and with bitweave's simulator, cycle by cycle, on random programs.
 - The whole test suite (166 tests, with real Pico SDK builds of generated C projects) passes on Amaranth 0.5.1, 0.5.10 and the 0.6 development version 0.6.0.dev140; a quick suite passes on every 0.5.x.
 - Not built yet in the Amaranth front end: autopull and autopush, `mov` with the OSR or ISR, `irq`, joined FIFOs and several state machines (the Python builder has all instructions).
 
@@ -80,8 +82,8 @@ pioweave is a normal Python package for an environment that has Amaranth:
 `pip` pulls in `amaranth>=0.5,<0.6`. Then `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list` shows the example designs.
 With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.md](docs/getting-started.md)).
 
-The package has three parts, as `amaranth` has `hdl`, `lib` and `vendor`: `pioweave` (platforms, compiler, project writers), `pioweave.builder` (the Python builder, needs no Amaranth) and
-`pioweave.boards` (board definitions).
+The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `pioweave` (platforms, compiler, project writers), `pioweave.builder` (the Python builder, needs no Amaranth), `pioweave.emulator`
+(the PIO emulator, needs no Amaranth) and `pioweave.boards` (board definitions).
 
 ## Documentation
 
@@ -91,11 +93,23 @@ The package has three parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowe
 | [docs/designing-for-pio.md](docs/designing-for-pio.md) | the Amaranth style that compiles to PIO: what maps to which instruction, delays, side-set, pins, what is refused |
 | [docs/data-path.md](docs/data-path.md) | FIFOs, OSR and ISR: `pull`, `push`, `out`, `in` |
 | [docs/builder.md](docs/builder.md) | the Python builder (`pioweave.builder`) |
+| [docs/emulator.md](docs/emulator.md) | the PIO emulator: what is modelled, how to use it, how it was checked |
 | [docs/boards.md](docs/boards.md) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
 | [docs/projects.md](docs/projects.md) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
 | [docs/compatibility.md](docs/compatibility.md) | supported Amaranth versions, the version gate, the test matrix |
 | [docs/testing.md](docs/testing.md) | running the tests, co-simulation, environment variables |
 | [docs/design-notes/](docs/design-notes/) | the design notes the code was written from |
+
+## Layout
+
+    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), compile, data, designs, platform, project, doctor, _compat
+    pioweave/builder/      the Python builder (needs no Amaranth)
+    pioweave/emulator/     the PIO emulator (needs no Amaranth)
+    pioweave/boards/       board definitions
+    tests/                 the tests (pytest); tests/__init__.py makes it a package
+    docs/                  the documentation (Sphinx with Markdown: `sphinx-build docs docs/_build`)
+    scripts/matrix.sh      the Amaranth version matrix
+    .github/workflows/     CI
 
 ## Relation to bitweave
 

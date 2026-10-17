@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
-import cosim  # noqa: E402
+from . import cosim  # noqa: E402
 from pioweave import designs as pio_designs  # noqa: E402
 from pioweave.compile import PioCompileError, compile_design  # noqa: E402
 from pioweave.platform import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform, RP2354PioPlatform  # noqa: E402

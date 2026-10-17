@@ -13,7 +13,7 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-import cosim  # noqa: E402
+from . import cosim  # noqa: E402
 from pioweave import designs as pio_designs  # noqa: E402
 from pioweave.project import PioProjectError, find_pioasm  # noqa: E402
 from pioweave.platform import PLATFORMS

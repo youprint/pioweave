@@ -3,6 +3,7 @@
 
   pioweave.builder   a Python builder for PIO programs, one method per instruction (needs no Amaranth)
   pioweave           Amaranth platforms for the PIO blocks, the FSM-to-PIO compiler, the project writers (this module's public names, below)
+  pioweave.emulator  an emulator for the PIO blocks: four state machines, shared instruction memory, FIFOs, IRQ flags, pins (needs no Amaranth)
   pioweave.boards    board definitions with named pins: Raspberry Pi Pico, Pico 2, WeAct Studio RP2350B core, Waveshare Core2350B
 
 A design is an Amaranth module written in a restricted style (one FSM, one state = one PIO instruction); `platform.build(design, name, dir,

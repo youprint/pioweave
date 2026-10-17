@@ -1,7 +1,7 @@
 # Testing
 
     pip install -e '.[test]'
-    pytest -q -W error tests
+    pytest -q -W error tests                  # or: pdm run test
 
 Without the tools below, the tests that need them are **skipped, not passed**. Run `python -m pioweave doctor` to see which tools are found.
 
@@ -11,6 +11,7 @@ Without the tools below, the tests that need them are **skipped, not passed**. R
 |---|---|---|
 | `tests/test_program.py` | the builder: every instruction form, every error, and that its own encoder equals the real `pioasm` on 10,681 words in 351 programs | `pioasm` for the comparison |
 | `tests/test_compile.py` | the compiler: the ten example designs, 450 random control-flow designs and 250 random data-path designs run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version | the `bitweave` binary and `pioasm` |
+| `tests/test_emulator.py`, `tests/test_emulator_amaranth.py`, `tests/test_emulator_differential.py` | the emulator: directed tests, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs; see [emulator](emulator.md) | the differential one needs `bitweave` and `pioasm` |
 | `tests/test_refusals.py` | everything the compiler must refuse, with the reason; the version gate; the FSM state-name lookup | nothing |
 | `tests/test_project.py` | the generated files, that the generated bitweave cases pass in bitweave, that the generated C projects build to a UF2 with the real Pico SDK, the deprecated `build()` keywords, the `PioDesign` base class | bitweave, `pioasm`; the SDK build needs `PIO_BUILD_FIRMWARE=1` |
 | `tests/test_boards.py` | the board pins against the Pico SDK headers and a blink design compiled on each board | an SDK checkout for the header comparison |
@@ -28,7 +29,8 @@ depends on the state machine clock and on the pads.
 | `BITWEAVE_REPO` | a bitweave checkout, used to find the Pico SDK and the compiler under `.tools` (default `../bitweave`) |
 | `PICO_SDK_PATH`, `ARM_TOOLCHAIN_DIR` | the Pico SDK and the directory with `arm-none-eabi-gcc` |
 | `PIO_BUILD_FIRMWARE=1` | also build the generated C projects (about 35 s each) |
-| `PIO_COSIM_N` | number of random designs per generator (default 15; 250 for a thorough run) |
+| `PIO_COSIM_N` | number of random Amaranth designs per generator (default 15; 250 for a thorough run) |
+| `PIO_EMU_N` | number of random programs in the emulator's differential test against bitweave (default 40; each takes about 4 s) |
 | `PIOWEAVE_ALLOW_UNTESTED=1` | let pioweave import with an Amaranth version it was not tested with |
 
 A random design that fails prints its seed, the generated program and the specification, so it can be replayed: `PIO_COSIM_N=200 pytest -k "random_data and 194"`.

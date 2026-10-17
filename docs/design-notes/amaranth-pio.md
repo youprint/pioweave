@@ -1,6 +1,6 @@
 # PIO programs written in Amaranth: design note
 
-Code: pioweave/src/pioweave/ (platform.py, compile.py, data.py, project.py, designs.py). Tests: pioweave/tests/test_compile.py, test_refusals.py, test_project.py, with cosim.py.
+Code: pioweave/ (platform.py, compile.py, data.py, project.py, designs.py). Tests: tests/test_compile.py, test_refusals.py, test_project.py, with cosim.py.
 
 ## 1. Idea
 
@@ -17,7 +17,7 @@ Amaranth has one platform module per target (`amaranth.build.Platform`; the vend
 
 A PIO state machine is an FSM whose state is the program counter and that executes one instruction per clock cycle. A design written as one Amaranth FSM in which every state does what one PIO instruction does is therefore cycle-equivalent to the program, and the Amaranth simulation of the design is the reference. The compiler maps one FSM state to one instruction and refuses everything that would change the cycle behaviour.
 
-## 2. What is accepted (pioweave/src/pioweave/compile.py reads the Amaranth 0.5.10 IR, Fragment.statements)
+## 2. What is accepted (pioweave/compile.py reads the Amaranth 0.5.10 IR, Fragment.statements)
 
 One `m.FSM()` in the `sync` domain, no submodules, no logic outside the FSM, no combinational logic. States are placed in definition order (Amaranth numbers FSM states by first mention, but the cases of the generated Switch follow the source order; the compiler uses the source order, the first defined state is PIO address 0).
 
@@ -38,7 +38,7 @@ One `m.FSM()` in the `sync` domain, no submodules, no logic outside the FSM, no 
 
 Jumps and waits take their layout from the next-state rule: PIO can jump on `!x`, `x--`, `!y`, `y--`, `x!=y` and on a pin that is high, so the compiler picks, of the two branches, the one that is not the next state as the jump and negates the test if needed. A branch state cannot also carry a delay (the taken path would pay it too), so only `set`/`mov`/`nop`/`wait` states take folded delays.
 
-## 2a. The data path: FIFOs, OSR and ISR (pioweave/src/pioweave/data.py)
+## 2a. The data path: FIFOs, OSR and ISR (pioweave/data.py)
 
 `sh = platform.shifter(m, out_shift="right", in_shift="right")` (once per design, inside `elaborate`) creates the OSR, ISR, their bit counters, and the model of the two 4-word FIFOs (a submodule, `FifoModel`). Its
 methods add to the current FSM state exactly the register updates of one PIO instruction, so the Amaranth simulation of the design stays the reference:
@@ -96,7 +96,7 @@ Amaranth sim: the FSM state in clock cycle t does what the instruction executed 
 
 - Example designs (ten, four of them with the data path) and random designs of the subset (an FSM of 2 to 12 states with random kinds, layouts, side-set, pins and input waveforms): the Amaranth simulation and the bitweave simulator running the compiled program agree pin by pin and cycle by cycle (tests/test_pio_compile.py): 300 random designs of the first generator and 150 of the final one (which also draws RP2350A, RP2350B and RP2354B and puts pins on GPIO 20 to 45 so that the GPIO base is 16) all agree; the default run uses 15, `PIO_COSIM_N` sets more.
 - Data path: 250 random designs (PULL / PUSH blocking and non-blocking, OUT to pins / X / Y / null, IN from pins / X / Y / null with random counts, both shift directions, TX words at cycle 0 and written later, draining and non-draining host, 1 to 4 output pins, 1 to 3 input pins, optional side-set, RP2040, RP2350, RP2350B and RP2354) agree with the bitweave simulator on pin waveforms, the words pushed with their cycles and the FIFO contents left at the end (one seed of the 250 first run was a generator error, fixed); the data-path refusals and the helper-misuse errors are tested too.
-- Refusals: 25 tests in all (14 of them for the data path), each naming its reason (pioweave/tests/test_refusals.py; several tests contain more than one refused design).
+- Refusals: 25 tests in all (14 of them for the data path), each naming its reason (tests/test_refusals.py; several tests contain more than one refused design).
 - Project writers: files, content, the generated cases pass in bitweave, and two generated C projects build to a UF2 with the real Pico SDK (tests/test_pio_project.py).
 
 ## 7. Not verified
