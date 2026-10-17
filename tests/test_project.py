@@ -242,7 +242,7 @@ class ProjectFileTests(support.TestCase):
     def test_micropython_needs_pioasm(self):
         from pioweave import project as pio_project
         with mock.patch.dict(os.environ, {"PIOASM": str(self.tmp_path / "missing"), "PATH": "/nonexistent"}), \
-                mock.patch.object(pio_project.os.path, "exists", lambda p: False):
+                mock.patch.object(pio_project.os.path, "isfile", lambda p: False):
             with self.assertRaisesRegex(PioProjectError, "needs pioasm"):
                 build(self.tmp_path, "square_wave", "micropython")
 
