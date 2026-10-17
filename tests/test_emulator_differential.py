@@ -12,7 +12,7 @@ import unittest
 from pioweave.emulator import run_case
 
 from . import cosim, support
-from .emu_random import random_case
+from .emu_random import FAMILIES, random_case
 
 BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = unittest.skipIf(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
@@ -54,13 +54,13 @@ def simulator(program, cycles, cfg, stim, tx, tx_feed, drain):
         shutil.rmtree(d, ignore_errors=True)
 
 
-def compare(seed):
-    program, cycles, cfg, stim, tx, tx_feed, drain = random_case(seed)
+def compare(seed, family=None):
+    program, cycles, cfg, stim, tx, tx_feed, drain = random_case(seed, family)
     version = 0 if program.chip == "rp2040" else 1
     sim = simulator(program, cycles, cfg, stim, tx, tx_feed, drain)
     emu_cfg = {k: v for k, v in cfg.items()}
     emu = run_case(program, cycles, version=version, stim=stim, tx=tx, tx_feed=tx_feed, drain=drain, record=True, on_error="stop", **emu_cfg)
-    why = "seed %d\n%s\n%s" % (seed, program.pio_text(), cfg)
+    why = "seed %d family %s\n%s\n%s" % (seed, family, program.pio_text(), cfg)
     if sim.get("error") and re.match(r"cycle \d+:", sim["error"]) and "cycle" in sim["error"]:
         # a program that does something undefined: both must stop at the same cycle
         assert emu.error is not None, "the simulator stopped (%s) but the emulator did not\n%s" % (sim["error"], why)
@@ -88,3 +88,9 @@ class DifferentialTests(support.TestCase):
     @support.parametrize("seed", range(N))
     def test_emulator_matches_the_pio_simulator(self, seed):
         compare(seed)
+
+    @needs_tools
+    @support.parametrize("family", list(FAMILIES))
+    @support.parametrize("seed", range(max(N // 4, 4)))
+    def test_emulator_matches_the_pio_simulator_on_a_family(self, family, seed):
+        compare(seed, family)
