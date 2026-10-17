@@ -16,8 +16,10 @@ for several blocks through `PioBlock.neighbours`, IN with a count, MOV status fr
     block.run(100)                                  # 100 system clock cycles
     sm.get()                                        # a word out of the RX FIFO, or None
 
-Facts marked [verify] come from the datasheets as recalled and have not been checked against a chip. Nothing here has run on a chip; the emulator is checked against the PIO
-simulator of bitweave (tests/test_emulator_differential.py) and against the Amaranth designs of pioweave (tests/test_compile.py).
+Sources: the RP2040 datasheet (build-date 2025-02-20, build-version 3184e62-clean, chapter 3) and the RP2350 datasheet (Release 8, build date 01/10/2026, build version
+80d627281ed5, chapter 11), cited as "RP2040 p.NNN" and "RP2350 p.NNN" with the printed page numbers of the PDF (the page numbers of the PDF viewer are one higher). Facts still
+marked [verify] are not stated in these documents. Nothing here has run on a chip; the emulator is checked against the PIO simulator of bitweave
+(tests/test_emulator_differential.py) and against the Amaranth designs of pioweave (tests/test_compile.py).
 """
 from collections import deque
 
@@ -102,44 +104,55 @@ class Config:
     Attributes
     ----------
     in_base, in_count : int
-        First pin of the IN mapping and its width (32 at reset).
+        First pin of the IN mapping and its width (32 at reset; IN_COUNT exists on PIO version 1 only, RP2350 Table 1053 p.858).
     out_base, out_count : int
-        First pin of the OUT mapping and its width (0 at reset).
+        First pin of the OUT mapping and its width (0 at reset, RP2040 Table 386 p.378).
     set_base, set_count : int
-        First pin of the SET mapping and its width (0 at reset).
+        First pin of the SET mapping and its width (the count is 5 at reset, RP2040 Table 386 p.378, RP2350 Table 1056 p.859).
     side_base : int
         First pin of the side-set mapping.
     jmp_pin : int
         The pin tested by ``jmp pin`` and used by ``wait jmppin``.
     in_right, out_right : bool
-        Shift direction of the ISR and OSR (right at reset) [verify].
+        Shift direction of the ISR and OSR (right at reset: IN_SHIFTDIR and OUT_SHIFTDIR reset to 0x1, RP2040 Table 383 p.377, RP2350 Table 1053 p.857).
     autopush, autopull : bool
         Automatic push and pull.
     push_thresh, pull_thresh : int
-        The thresholds, 1 to 32 (32 at reset).
+        The thresholds, 1 to 32 (the register value 0 means 32 and is the reset value, RP2040 Table 383 p.377).
     wrap_bottom, wrap_top : int
         The wrap range, as absolute instruction addresses.
     side_bits, side_opt, side_pindirs : int, bool, bool
         The side-set field: bit count (including the enable bit of an optional side-set), optional, and whether it drives pin directions.
     status_sel : str
-        The ``mov status`` source: ``"tx"``, ``"rx"`` or ``"irq"``.
+        The ``mov status`` source: ``"tx"`` (all-ones if the TX FIFO level is below `status_n`), ``"rx"`` (the RX FIFO level), or on PIO version 1 ``"irq"`` (all-ones if the
+        indexed IRQ flag is raised). RP2040 Table 382 p.377, RP2350 Table 1052 p.857.
     status_n : int
-        The level or flag number compared by ``mov status``.
+        The level, or the IRQ flag: 0 to 7 for a flag of this block, 8 to 15 for a flag of the next lower-numbered block, 16 to 23 for the next higher-numbered block (RP2350
+        Table 1052 p.857).
     fifo_join : str
-        ``"none"``, ``"tx"`` or ``"rx"``; on PIO version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
+        ``"none"``, ``"tx"`` (TX FIFO 8 deep, RX FIFO unavailable), ``"rx"`` (the reverse), ``"both"`` (both unavailable: FJOIN_TX and FJOIN_RX set, RP2040 3.5.3 p.335); on PIO
+        version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
     clkdiv : float
-        The clock divider (1.0 at reset).
+        The clock divider, 1.0 to 65536 in steps of 1/256 (1.0 at reset; the register field INT = 0 means 65536, RP2040 Table 381 p.376).
     sync_bypass : bool
-        Bypass the input synchroniser.
+        Unused; the synchronisers are bypassed per GPIO with `PioBlock.sync_bypass` (INPUT_SYNC_BYPASS).
+    out_sticky : bool
+        EXECCTRL_OUT_STICKY: the most recent OUT / SET pin write is asserted again on every cycle (RP2040 Table 382 p.376; the exact behaviour is [verify]).
+    inline_out_en : bool
+        EXECCTRL_INLINE_OUT_EN: bit `out_en_sel` of the OUT data is an auxiliary write enable; with `out_sticky` a write with enable 0 deasserts the latest pin write
+        (same table; the exact behaviour is [verify]).
+    out_en_sel : int
+        EXECCTRL_OUT_EN_SEL: the data bit used as the inline OUT enable.
     """
     __slots__ = ("in_base", "in_count", "out_base", "out_count", "set_base", "set_count", "side_base", "jmp_pin", "in_right", "out_right", "autopush", "autopull", "push_thresh",
-                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass")
+                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass", "out_sticky", "inline_out_en", "out_en_sel")
 
     def __init__(self):
         self.in_base = self.out_base = self.set_base = self.side_base = self.jmp_pin = 0
         self.in_count = 32
-        self.out_count = self.set_count = 0
-        self.in_right = self.out_right = True            # the reset value of the shift directions is right (SHIFTCTRL, RP2040 datasheet 3.7) [verify]
+        self.out_count = 0
+        self.set_count = 5                               # PINCTRL_SET_COUNT resets to 5 (RP2040 Table 386 p.378)
+        self.in_right = self.out_right = True            # IN_SHIFTDIR and OUT_SHIFTDIR reset to 1 = right (RP2040 Table 383 p.377)
         self.autopush = self.autopull = False
         self.push_thresh = self.pull_thresh = 32
         self.wrap_bottom, self.wrap_top = 0, 31
@@ -148,6 +161,8 @@ class Config:
         self.fifo_join = "none"                          # none, tx, rx; version 1 also rx_put, rx_get, rx_put_get
         self.clkdiv = 1.0
         self.sync_bypass = False
+        self.out_sticky = self.inline_out_en = False
+        self.out_en_sel = 0
 
 
 class StateMachine:
@@ -196,7 +211,8 @@ class StateMachine:
 
     # ------------------------------------------------------------------ host side
     def reset(self):
-        """Restart the state machine (SM restart and clock divider restart): registers cleared, OSR empty, FIFOs emptied, PC at the wrap bottom is not implied: `set_pc`.
+        """Restart the state machine (SM restart and clock divider restart): registers cleared, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.338: nothing shifted in,
+        nothing left to shift out), FIFOs emptied, clock divider restarted; the PC is not set (use `set_pc`).
 
         The state machine is left disabled."""
         self.pc = 0
@@ -211,7 +227,12 @@ class StateMachine:
         self.irq_set_done = False
         self.exec_word = None
         self.cur_forced = None
-        self.acc = 0                                      # clock divider accumulator, in 1/256 of a system clock
+        self.cur_source = "exec"                          # where the latched instruction came from: "exec" (OUT / MOV EXEC) or "host" (SMx_INSTR)
+        self.force_fresh = False                          # a host-forced instruction that has not been tried yet
+        self.saved_flags = None
+        self.cd_left = 0                                  # clock divider: system cycles left in the current division period (0 = not started)
+        self.cd_total = 0                                 # clock divider: running total of the fractional part, in 1/256
+        self.sticky = {}                                  # OUT_STICKY: the most recent OUT / SET write per target (levels or directions)
         self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
         self.executed = self.stall_cycles = self.delay_cycles = 0
         self.rx_lost = self.tx_dropped = 0
@@ -219,13 +240,16 @@ class StateMachine:
         self._apply_join()
 
     def _apply_join(self):
-        """FIFO depths (TX, RX): 4 and 4; joined to 8 and 0 or 0 and 8; with the RX FIFO registers of PIO version 1 the TX FIFO keeps four words and the RX storage is four registers [verify]."""
-        self.tx.depth, self.rx.depth = {"none": (4, 4), "tx": (8, 0), "rx": (0, 8), "rx_put": (4, 0), "rx_get": (4, 0), "rx_put_get": (4, 0)}[self.cfg.fifo_join]
+        """FIFO depths (TX, RX): 4 and 4; joined to 8 and 0 or 0 and 8, or 0 and 0 with both join bits (RP2040 3.5.3 p.335: "Setting both FJOIN_RX and FJOIN_TX makes both FIFOs
+        unavailable"); with the RX FIFO registers of PIO version 1 the RX FIFO is disabled and its storage is four registers (RP2350 Table 1053 p.858), the TX FIFO is not mentioned
+        there and keeps four words."""
+        self.tx.depth, self.rx.depth = {"none": (4, 4), "tx": (8, 0), "rx": (0, 8), "both": (0, 0), "rx_put": (4, 0), "rx_get": (4, 0), "rx_put_get": (4, 0)}[self.cfg.fifo_join]
 
     def configure(self, program=None, **kw):
         """Set the configuration. `program`: what `PioBlock.load()` returned (wrap range and side-set are taken from it and the PC is set to its start). Keywords: in_base, in_count,
         out_base, out_count, set_base, set_count, side_base, jmp_pin, in_shift / out_shift ("right" or "left"), autopush, autopull, push_thresh, pull_thresh, status_sel,
-        status_n, fifo_join, clkdiv, sync_bypass, side_bits, side_opt, side_pindirs, wrap_bottom, wrap_top (absolute addresses).
+        status_n, fifo_join, clkdiv, side_bits, side_opt, side_pindirs, wrap_bottom, wrap_top (absolute addresses), out_sticky, inline_out_en, out_en_sel. Changing
+        `fifo_join` discards the words in both FIFOs, as the hardware does.
 
         Parameters
         ----------
@@ -247,6 +271,7 @@ class StateMachine:
             If a direction, threshold or FIFO join is not valid, or a join needs PIO version 1, or autopush is combined with an RX FIFO PUT / GET join.
         """
         c = self.cfg
+        join_before = c.fifo_join
         if program is not None:
             if not isinstance(program, Loaded):
                 raise TypeError("program must be what PioBlock.load() returned")
@@ -266,13 +291,24 @@ class StateMachine:
             v = getattr(c, key)
             if not 1 <= v <= 32:
                 raise ValueError("%s must be 1..32" % key)
-        if c.fifo_join not in ("none", "tx", "rx", "rx_put", "rx_get", "rx_put_get"):
-            raise ValueError("fifo_join: none, tx, rx, rx_put, rx_get or rx_put_get")
+        if c.fifo_join not in ("none", "tx", "rx", "both", "rx_put", "rx_get", "rx_put_get"):
+            raise ValueError("fifo_join: none, tx, rx, both, rx_put, rx_get or rx_put_get")
+        if c.status_sel not in ("tx", "rx", "irq"):
+            raise ValueError("status_sel: tx, rx or irq")
+        if c.status_sel == "irq" and self.block.version < 1:
+            raise ValueError("MOV status from an IRQ flag is a PIO version 1 feature")
+        if not 1.0 <= c.clkdiv <= 65536.0:
+            raise ValueError("clkdiv is 1 to 65536")
+        if not 0 <= c.out_en_sel <= 31:
+            raise ValueError("out_en_sel must be 0..31")
         if c.fifo_join in ("rx_put", "rx_get", "rx_put_get") and self.block.version < 1:
             raise ValueError("the RX FIFO register join is a PIO version 1 feature")
         if c.autopush and c.fifo_join in ("rx_put", "rx_get", "rx_put_get"):
             raise ValueError("autopush must not be enabled with an RX FIFO PUT / GET join (undefined)")
         self._apply_join()
+        if c.fifo_join != join_before:                      # "FIFOs are flushed when this bit is changed" (RP2040 Table 383 p.377, RP2350 Table 1053 p.857)
+            self.tx.q.clear()
+            self.rx.q.clear()
         return self
 
     def enable(self):
@@ -319,7 +355,11 @@ class StateMachine:
         return self.rx.pop()
 
     def force(self, word):
-        """Execute `word` in the next cycle instead of the program (SMx_INSTR). It runs with its side-set and stalls like any instruction; the delay is applied [verify].
+        """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.344, RP2350 11.5.7 p.826): the instruction executes
+        immediately, "ignoring the state machine clock divider" and whether or not the state machine is enabled (it is how the SDK sets a state machine up), its delay cycles
+        are ignored, and the program counter does not advance, so the program continues where it left off unless the forced instruction jumps. A forced instruction may stall; it is
+        then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it replaces an OUT / MOV EXEC instruction in
+        flight. Its side-set is applied like any other [verify].
 
         Parameters
         ----------
@@ -332,6 +372,8 @@ class StateMachine:
             `self`.
         """
         self.cur_forced = word & 0xFFFF
+        self.cur_source = "host"
+        self.force_fresh = True
         return self
 
     # ------------------------------------------------------------------ helpers
@@ -371,7 +413,13 @@ class StateMachine:
     def _status(self):
         c = self.cfg
         if c.status_sel == "irq":
-            on = bool(self.block.irq & (1 << (c.status_n & 7)))
+            mode, flag = (c.status_n >> 3) & 3, c.status_n & 7           # 0: this block, 1: next lower-numbered block, 2: next higher-numbered (RP2350 Table 1052 p.857)
+            if mode == 3:
+                raise EmulationError("STATUS_N 24 to 31 is reserved for an IRQ status")
+            block = self.block if mode == 0 else self.block.neighbour(-1 if mode == 1 else 1)
+            if block is None:
+                raise EmulationError("MOV status refers to an IRQ flag of another PIO block that is not part of this emulation")
+            on = bool(block.irq & (1 << flag))
         elif c.status_sel == "rx":
             on = len(self.rx) < c.status_n
         else:
@@ -386,6 +434,17 @@ class StateMachine:
     def _write(self, stage, base, count, value, dirs=False):
         for j in range(min(count, 32)):
             stage.append((dirs, (base + j) & 31, (value >> j) & 1))
+
+    def _pin_write(self, ctx, base, count, value, dirs=False, inline=False):
+        """An OUT, SET or MOV write to the pins or pin directions. With EXECCTRL_INLINE_OUT_EN an OUT write whose enable bit (bit OUT_EN_SEL of the data) is 0 does not happen, and with
+        EXECCTRL_OUT_STICKY it also deasserts the latest write; with OUT_STICKY the write is remembered and asserted again on every cycle (RP2040 Table 382 p.376; details [verify])."""
+        c = self.cfg
+        if inline and c.inline_out_en and not (value >> c.out_en_sel) & 1:
+            self.sticky.pop(dirs, None)
+            return
+        self._write(ctx.writes, base, count, value, dirs)
+        if c.out_sticky:
+            self.sticky[dirs] = (base, count, value)
 
     def _side_set(self, word, stage):
         c = self.cfg
@@ -500,13 +559,13 @@ class StateMachine:
                 data = self._shift_out(n)
                 d = (a >> 5) & 7
                 if d == 0:
-                    self._write(ctx.writes, c.out_base, c.out_count, data)
+                    self._pin_write(ctx, c.out_base, c.out_count, data, False, True)
                 elif d == 1:
                     self.x = data
                 elif d == 2:
                     self.y = data
                 elif d == 4:
-                    self._write(ctx.writes, c.out_base, c.out_count, data, True)
+                    self._pin_write(ctx, c.out_base, c.out_count, data, True, True)
                 elif d == 5:
                     jump = data & 31
                 elif d == 6:
@@ -516,6 +575,8 @@ class StateMachine:
                 self._background_pull()
         elif op == 4:                                                        # PUSH / PULL (and MOV to / from the RX FIFO registers on version 1)
             if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0 and not word & 4:
+                if not word & 8 and word & 7:
+                    raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.810)")
                 idx = (word & 3) if word & 8 else (self.y & 3)
                 if not word & 0x80:
                     if c.fifo_join not in ("rx_put", "rx_put_get"):
@@ -578,7 +639,7 @@ class StateMachine:
                 raise EmulationError("MOV operation 11 is reserved")
             d = (a >> 5) & 7
             if d == 0:
-                self._write(ctx.writes, c.out_base, c.out_count, val)
+                self._pin_write(ctx, c.out_base, c.out_count, val)
             elif d == 1:
                 self.x = val
             elif d == 2:
@@ -586,7 +647,7 @@ class StateMachine:
             elif d == 3:
                 if blk.version == 0:
                     raise EmulationError("MOV PINDIRS is not supported on PIO version 0")
-                self._write(ctx.writes, c.out_base, c.out_count, val, True)
+                self._pin_write(ctx, c.out_base, c.out_count, val, True)
             elif d == 4:
                 self.exec_word = val & 0xFFFF
             elif d == 5:
@@ -619,13 +680,13 @@ class StateMachine:
         else:                                                                # SET
             data, d = a & 31, (a >> 5) & 7
             if d == 0:
-                self._write(ctx.writes, c.set_base, c.set_count, data)
+                self._pin_write(ctx, c.set_base, c.set_count, data)
             elif d == 1:
                 self.x = data
             elif d == 2:
                 self.y = data
             elif d == 4:
-                self._write(ctx.writes, c.set_base, c.set_count, data, True)
+                self._pin_write(ctx, c.set_base, c.set_count, data, True)
             else:
                 raise EmulationError("SET destination %s is reserved" % format(d, "03b"))
         if first:
@@ -636,47 +697,78 @@ class StateMachine:
     def _step(self, view, ctx):
         """One state machine clock cycle."""
         c, blk = self.cfg, self.block
-        if self.delay_left > 0:
+        if self.cur_forced is not None:                                    # a latched instruction: a forced one that stalled, or the executee of OUT / MOV EXEC
+            word, source = self.cur_forced, self.cur_source
+            self.cur_forced = None
+        elif self.delay_left > 0:
             self.delay_left -= 1
             self.delay_cycles += 1
             self.last = ("d", 0, self.pc)
             self._background_pull()
             return
-        forced = self.cur_forced is not None or self.exec_word is not None
-        if self.cur_forced is not None:
-            word, self.cur_forced = self.cur_forced, None
         elif self.exec_word is not None:
-            word, self.exec_word = self.exec_word, None
+            word, source = self.exec_word, "exec"
+            self.exec_word = None
         else:
-            word = blk.mem[self.pc & 31]
+            word, source = blk.mem[self.pc & 31], "mem"
             if word is None:
                 raise EmulationError("state machine %d: pc %d executes empty instruction memory" % (self.index, self.pc))
+        self._run(word, source, view, ctx)
+
+    def _step_forced(self, view, ctx):
+        """The cycle in which a word written to SMx_INSTR executes: it replaces the instruction the state machine would run (if any), whether or not the state machine is enabled
+        and whatever its clock divider says."""
+        word, self.cur_forced = self.cur_forced, None
+        self.force_fresh = False
+        if self.saved_flags is None:                                       # the interrupted instruction keeps its progress (side-set done, IN done, IRQ set)
+            self.saved_flags = (self.side_done, self.in_shifted, self.irq_set_done)
+        self.side_done = self.in_shifted = self.irq_set_done = False
+        self._run(word, "host", view, ctx)
+
+    def _run(self, word, source, view, ctx):
+        c = self.cfg
         pc_before = self.pc
         res, jump, is_out = self._exec(word, view, ctx)
-        self.last = ("s" if res == "stall" else ("f" if forced else "e"), word, pc_before)
+        self.last = ("s" if res == "stall" else ("f" if source != "mem" else "e"), word, pc_before)
         if res == "stall":
             self.stall_cycles += 1
-            if forced:
-                self.cur_forced = word
+            if source != "mem":
+                self.cur_forced, self.cur_source = word, source            # latched until it completes (EXEC_STALLED)
         else:
             self.executed += 1
             self.side_done = False
-            self.delay_left = 0 if self.exec_word is not None else self._delay_of(word)    # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies
+            if source == "host":
+                self.in_shifted = self.irq_set_done = False
+                if self.saved_flags is not None:
+                    self.side_done, self.in_shifted, self.irq_set_done = self.saved_flags
+                    self.saved_flags = None
+            else:
+                # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies (RP2040 3.4.5.2 p.327); those of a forced instruction are ignored too (3.5.7 p.345)
+                self.delay_left = 0 if self.exec_word is not None else self._delay_of(word)
             if jump is not None:
                 self.pc = jump & 31
-            elif not forced:
+            elif source == "mem":
                 self.pc = c.wrap_bottom if self.pc == c.wrap_top else (self.pc + 1) & 31
         if not is_out:
             self._background_pull()
 
     def _clock_enable(self):
-        """The fractional clock divider: True in the system clock cycles in which the state machine advances (average rate 1 / clkdiv) [verify the jitter pattern]."""
-        div = max(int(round(self.cfg.clkdiv * 256)), 256)
-        self.acc += 256
-        if self.acc >= div:
-            self.acc -= div
-            return True
-        return False
+        """The fractional clock divider: True in the system clock cycles in which the state machine advances. Following RP2040 3.5.5 p.339-340 (RP2350 11.5.5 p.822-823): the divider
+        counts a division period of n system clock cycles and emits an enable pulse at its end; it keeps a running total of the fractional part (first-order delta-sigma) of each
+        period, and every time this total wraps through 1 the next period is n + 1 cycles. The average rate is 1 / (n + f/256). The datasheet does not say where the first period
+        starts after the state machine is enabled; here a period starts on the first enabled cycle (with a divisor of 1 the enable is asserted on every cycle, Figure 45) [verify]."""
+        d = max(int(round(self.cfg.clkdiv * 256)), 256)
+        n, f = d >> 8, d & 255
+        if self.cd_left <= 0:
+            self.cd_left = n
+        self.cd_left -= 1
+        if self.cd_left > 0:
+            return False
+        self.cd_total += f
+        wrapped = self.cd_total >= 256
+        self.cd_total &= 255
+        self.cd_left = n + 1 if wrapped else n
+        return True
 
     def snapshot(self):
         """The state after the last cycle, as recorded in the trace of `run_case` with ``record=True``.
@@ -738,12 +830,20 @@ class PioBlock:
     gpio_base : int
         0, or 16 on PIO version 1 (the 48-GPIO parts).
     sync_cycles : int
-        Cycles of the input synchroniser: 2 as in the hardware [verify], 0 bypasses it.
+        Cycles of the input synchroniser: 2 by default, a "standard 2-flipflop synchroniser" on each GPIO input that is engaged unless the INPUT_SYNC_BYPASS bit of the GPIO is
+        set (RP2040 3.5.6.3 p.342 and Table 376 p.375, RP2350 11.5.6.3 p.825); 0 bypasses it for every GPIO.
+    loopback : str
+        How a state machine sees its own block's outputs. ``"direct"`` (the default, the convention of bitweave's simulator and of pioweave's Amaranth simulation): an instruction
+        sees the pin levels written by the previous cycle's instruction. ``"datasheet"``: "a state machine observing its own outputs is subject to ... a two-cycle delay when
+        bypassing synchronisers, a four-cycle delay when synchronisers are engaged" (RP2040 3.5.6.1 p.342); the extra cycles are `sync_cycles` + 1. The RP2350 datasheet does not
+        repeat the statement ("improved GPIO input/output delay and skew", 11.1.1 p.793), so for version 1 the numbers are [verify].
 
     Attributes
     ----------
-    version, gpio_base, sync_cycles :
+    version, gpio_base, sync_cycles, loopback :
         The arguments as given.
+    sync_bypass : int
+        INPUT_SYNC_BYPASS: one bit per pin of the window; a pin whose bit is 1 bypasses the synchroniser (0, all synchronised, at reset).
     mem : list
         The 32 words of the instruction memory (None for an empty word).
     irq : int
@@ -788,13 +888,18 @@ class PioBlock:
     [1, 1, 0, 0, 1, 1, 0, 0]
     """
 
-    def __init__(self, version=0, gpio_base=0, sync_cycles=2):
+    def __init__(self, version=0, gpio_base=0, sync_cycles=2, loopback="direct"):
+        if loopback not in ("direct", "datasheet"):
+            raise ValueError("loopback is 'direct' or 'datasheet'")
         if version not in (0, 1):
             raise ValueError("version is 0 (RP2040) or 1 (RP2350, RP2354)")
         if gpio_base not in (0, 16) or (gpio_base and version == 0):
             raise ValueError("gpio_base is 0, or 16 on PIO version 1 (the 48-GPIO parts)")
         self.version, self.gpio_base = version, gpio_base
-        self.sync_cycles = sync_cycles                    # 2 = the input synchroniser of the hardware [verify]; 0 = bypass
+        self.sync_cycles = sync_cycles                    # 2 = the input synchroniser of the hardware (RP2040 3.5.6.3 p.342); 0 = bypass
+        self.loopback = loopback
+        self.sync_bypass = 0                              # INPUT_SYNC_BYPASS, one bit per pin
+        self._own_history = []
         self.mem = [None] * 32
         self.irq = 0
         self.out_level = 0
@@ -944,21 +1049,32 @@ class PioBlock:
         """One system clock cycle."""
         hist = self._ext_history
         hist.append(self.ext)
-        ext_seen = hist[-1 - self.sync_cycles]
+        ext_seen = (hist[-1 - self.sync_cycles] & ~self.sync_bypass) | (self.ext & self.sync_bypass)
         del hist[0:len(hist) - (self.sync_cycles + 1)]
-        view = (self.out_level & self.dirs) | (ext_seen & ~self.dirs & MASK32)
+        own = self._own_history
+        own.append((self.out_level, self.dirs))
+        level, dirs = own[max(len(own) - 1 - (self.sync_cycles + 1 if self.loopback == "datasheet" else 0), 0)]
+        del own[0:max(len(own) - (self.sync_cycles + 2), 0)]
+        view = (level & dirs) | (ext_seen & ~dirs & MASK32)
         ctx = _Ctx()
         for sm in self.sm:
-            if sm.enabled and sm._clock_enable():
+            run = sm.enabled and sm._clock_enable()
+            if sm.enabled:
+                for is_dirs, (base, count, value) in sm.sticky.items():     # OUT_STICKY: the most recent OUT / SET is asserted again
+                    sm._write(ctx.writes, base, count, value, is_dirs)
+            if sm.force_fresh and sm.cur_forced is not None:
+                sm._step_forced(view, ctx)
+            elif run:
                 sm._step(view, ctx)
-        # apply the effects: SM0 first, so that a higher-numbered state machine wins on a pin both write in the same cycle [verify]
+        # apply the effects in state machine order, so that the highest-numbered state machine wins on a pin (levels and directions separately) when several write it in the same
+        # cycle (RP2040 3.5.6.1 p.341-342, RP2350 11.5.6.1 p.824-825); within one state machine the side-set was staged after the OUT / SET and so wins (RP2040 3.5.1 p.332)
         for dirs, pin, bit in ctx.writes:
             if dirs:
                 self.dirs = (self.dirs & ~(1 << pin)) | (bit << pin)
             else:
                 self.out_level = (self.out_level & ~(1 << pin)) | (bit << pin)
         self.irq &= ~sum(1 << f for f in ctx.irq_clear)
-        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 datasheet 11.2.7)
+        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.799 and 11.4.11 p.814)
         for nb, f in ctx.irq_clear_other:
             nb.irq &= ~(1 << f)
         for nb, f in ctx.irq_set_other:
@@ -966,6 +1082,26 @@ class PioBlock:
         self.cycle += 1
         if self.recording:
             self.trace.append({"cycle": self.cycle - 1, "pads": self.pads(), "dirs": self.dirs, "irq": self.irq, "sms": [sm.snapshot() for sm in self.sm]})
+
+    def irq_clear(self, mask):
+        """Clear IRQ flags from the host side (write 1 to clear the IRQ register, RP2040 3.7 List of Registers p.369).
+
+        Parameters
+        ----------
+        mask : int
+            One bit per flag, 0 to 7.
+        """
+        self.irq &= ~mask & 0xFF
+
+    def irq_force(self, mask):
+        """Raise IRQ flags from the host side (IRQ_FORCE: "writing here affects PIO internal state", RP2040 p.369).
+
+        Parameters
+        ----------
+        mask : int
+            One bit per flag, 0 to 7.
+        """
+        self.irq |= mask & 0xFF
 
     def run(self, cycles):
         """Run the block for a number of system clock cycles (calls `step`).

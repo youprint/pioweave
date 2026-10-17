@@ -13,6 +13,7 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    data-path
    builder
    emulator
+   hardware-testing
    boards
    projects
    compatibility
@@ -29,3 +30,4 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    design-notes/amaranth-pio
    design-notes/amaranth-package-study
    design-notes/amaranth-ir-study
+   design-notes/emulator-comparison
