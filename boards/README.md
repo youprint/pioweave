@@ -14,5 +14,7 @@ The Waveshare Core2350B page (waveshare.com/core2350b.htm, read 2026-10-17) conf
 The WeAct Studio RP2350B V1.0 schematic (RP2350B_SCH.pdf, supplied by the owner, read 2026-10-17; not stored in the repository) shows the blue LED on GPIO 25, the user key on GPIO 23 and the
 secondary flash / PSRAM chip select on GPIO 0 (through R14, 0 ohm). It has no default UART, I2C or SPI pins: those come from the Pico SDK header (`weact_studio_rp2350b_core.h`).
 
+Owner's boards (2026-10-17): the Raspberry Pi Pico (RP2040 target), the WeAct Studio RP2350B core and the Waveshare Core2350B.
+
 Not included: the Pico W and Pico 2 W (the LED is on the wireless chip, not on a GPIO). Further boards are added by copying one module and the header's numbers.
 Nothing here has run on a board.

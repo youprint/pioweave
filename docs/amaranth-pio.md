@@ -80,7 +80,7 @@ A PIO block sees 32 GPIOs at a time; GPIOBASE selects GPIO 0 to 31 or GPIO 16 to
 - the `.pio` text keeps real GPIO numbers in `wait gpio N` (pioasm accepts 0 to 47 on version 1 and flags the word; the SDK flips bit 4 when it loads the program with GPIO base 16, `pio.c`, `add_program_at_offset`);
 - `main.c` calls `pio_set_gpio_base(pio, 16)` before claiming a state machine and loading the program, and passes real GPIO numbers to `sm_config_set_*_pins`, `pio_gpio_init` and `pio_sm_set_consecutive_pindirs` (the SDK subtracts the base itself; `pio.h`, "On RP2350B ...");
 - `bitweave.toml` carries `gpio_base = 16` and the PIO's own pin numbers (GPIO minus the base) in the case, because bitweave's simulator models the hardware view;
-- the Pico SDK decides `PICO_RP2350A` from the board header: for a B variant the generated `bitweave.toml` needs a `board` whose header sets `PICO_RP2350A 0` (SDK examples with boards definitions in amaranth-rp-boards: `weact_studio_rp2350b_core`, `waveshare_core2350b`; the owner supplied the WeAct Studio RP2350B schematic and the Waveshare Core2350B page) [confirm which RP2350B board the owner has].
+- the Pico SDK decides `PICO_RP2350A` from the board header: for a B variant the generated `bitweave.toml` needs a `board` whose header sets `PICO_RP2350A 0` (SDK examples with boards definitions in amaranth-rp-boards: `weact_studio_rp2350b_core`, `waveshare_core2350b`; the owner supplied the WeAct Studio RP2350B schematic and the Waveshare Core2350B page) (owner, 2026-10-17: owns both the WeAct Studio RP2350B core and the Waveshare Core2350B).
 
 ## 4. Cycle alignment of the two simulators
 
