@@ -3,6 +3,8 @@
 `pioweave.builder.Program` writes a PIO program instruction by instruction. It needs no Amaranth. Errors are raised as `PioError` when the program is built, not when the chip misbehaves, and the
 instruction words come from an encoder written from the RP2040 (chapter 3) and RP2350 (chapter 11) datasheets, independent of `pioasm`.
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/builder`.
+
 ```python
 from pioweave.builder import Program, PINS, X, X_DEC
 

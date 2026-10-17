@@ -62,6 +62,7 @@ docs = [
 test.cmd = "python -m pytest -q -W error tests"
 test-quick.cmd = "python -m pytest -q -W error tests/test_refusals.py tests/test_program.py tests/test_boards.py tests/test_docs.py"
 document.cmd = "sphinx-build docs docs/_build"
+test-docs.cmd = "sphinx-build -W -b doctest docs docs/_build/doctest"
 matrix.cmd = "sh scripts/matrix.sh"
 
 [tool.pytest.ini_options]

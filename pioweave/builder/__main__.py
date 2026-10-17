@@ -11,8 +11,22 @@ import sys
 
 from . import examples
 
+__all__ = ["main"]
+
 
 def main(argv=None):
+    """Run the command line (see the module documentation).
+
+    Parameters
+    ----------
+    argv : list of str or None
+        The arguments; None means ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        The exit code.
+    """
     ap = argparse.ArgumentParser(prog="python -m pioweave.builder", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="list the example programs")

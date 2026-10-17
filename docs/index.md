@@ -17,6 +17,7 @@ boards
 projects
 compatibility
 testing
+reference/index
 design-notes/README
 ```
 

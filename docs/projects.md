@@ -2,6 +2,8 @@
 
 ## `platform.build()`
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/project`.
+
 ```python
 platform.build(design, name, build_dir, project="pio", sim=SimOptions(...))
 ```

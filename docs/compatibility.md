@@ -3,6 +3,8 @@
 pioweave is a normal Amaranth package: a platform (`amaranth.build.Platform` subclasses), designs written with `amaranth.hdl` and `amaranth.lib.wiring`, pins through `amaranth.lib.io.Buffer`, and the
 Amaranth simulator for the reference runs. It differs in one respect: the compiler reads the **statements** of the elaborated design, and Amaranth does not document an interface for that.
 
+The API reference of this part, generated from the docstrings, is in {doc}`reference/compat`.
+
 ## What the compiler reads
 
 | Need | Where it comes from |

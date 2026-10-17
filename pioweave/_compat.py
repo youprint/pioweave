@@ -19,10 +19,44 @@ TESTED_DEV = ("0.6.0.dev140",)         # GitHub main at commit 90449f1e6d5abdfb8
 
 
 class UnsupportedAmaranth(ImportError):
-    """The installed Amaranth is not a version this package was tested with."""
+    """The installed Amaranth is not a version this package was tested with.
+
+    It is an `ImportError`, raised at import time by the version gate in `check_version`, unless ``PIOWEAVE_ALLOW_UNTESTED=1`` is set.
+    """
 
 
 def check_version(version=None, allow=None):
+    """Check an Amaranth version against the versions this package was tested with (`TESTED`, `TESTED_DEV`).
+
+    Parameters
+    ----------
+    version : str or None
+        The version string; None means the installed Amaranth.
+    allow : bool or None
+        Do not raise for an untested version. None reads the environment variable ``PIOWEAVE_ALLOW_UNTESTED`` (``"1"`` allows).
+
+    Returns
+    -------
+    bool
+        True when the version is a tested one, False when it is untested but allowed.
+
+    Raises
+    ------
+    UnsupportedAmaranth
+        If the version is untested and not allowed.
+
+    Examples
+    --------
+    >>> from pioweave._compat import check_version
+    >>> check_version("0.5.3")
+    True
+    >>> check_version("0.4.0", allow=True)
+    False
+    >>> check_version("0.4.0", allow=False)  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+      ...
+    pioweave._compat.UnsupportedAmaranth: pioweave was tested with Amaranth 0.5.0 to 0.5.10 and ...; found 0.4.0. ...
+    """
     v = version if version is not None else amaranth.__version__
     allow = os.environ.get("PIOWEAVE_ALLOW_UNTESTED") == "1" if allow is None else allow
     parts = v.split(".")
@@ -43,7 +77,18 @@ from amaranth.hdl import _ast as ast  # noqa: E402
 
 
 def fsm_state_names(sig):
-    """{state number: "NAME/number"} when `sig` is the state signal of an `m.FSM()`, else None."""
+    """The state names of an FSM.
+
+    Parameters
+    ----------
+    sig : amaranth.hdl.Signal
+        A signal; the state signal of an ``m.FSM()`` has a decoder (0.5.x) or an enum format (0.6 development) that names the states.
+
+    Returns
+    -------
+    dict or None
+        ``{state number: "NAME/number"}`` when `sig` is the state signal of an ``m.FSM()``, else None.
+    """
     decoder = getattr(sig, "decoder", None)
     if callable(decoder):                                          # 0.5.x: the decoder function of the signal
         names = {}
@@ -62,7 +107,24 @@ def fsm_state_names(sig):
 
 
 def clock_period(us=1):
-    """The period for `Simulator.add_clock`: a `Period` where Amaranth has one (RFC 66, 0.6 development), else seconds as a float (0.5.x)."""
+    """The period for ``Simulator.add_clock``: a ``Period`` where Amaranth has one (RFC 66, 0.6 development), else seconds as a float (0.5.x).
+
+    Parameters
+    ----------
+    us : int or float
+        The period in microseconds.
+
+    Returns
+    -------
+    float or amaranth.sim.Period
+        The period in the form the installed Amaranth takes.
+
+    Examples
+    --------
+    >>> from pioweave._compat import clock_period
+    >>> clock_period(1)
+    1e-06
+    """
     try:
         from amaranth.sim import Period
     except ImportError:

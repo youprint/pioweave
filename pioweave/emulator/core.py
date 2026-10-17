@@ -21,6 +21,8 @@ simulator of bitweave (tests/test_emulator_differential.py) and against the Amar
 """
 from collections import deque
 
+__all__ = ["MASK32", "EmulationError", "Fifo", "Config", "StateMachine", "Loaded", "PioBlock"]
+
 MASK32 = 0xFFFFFFFF
 
 
@@ -29,10 +31,29 @@ def _mask(n):
 
 
 class EmulationError(Exception):
-    """The program does something the hardware leaves undefined or reserved, or reads empty instruction memory."""
+    """The program does something the hardware leaves undefined or reserved, or reads empty instruction memory.
+
+    Raised while a state machine runs (`PioBlock.step`, `PioBlock.run`, and `run_case` unless called with ``on_error="stop"``) and by `PioBlock.load` when the
+    program does not fit.
+    """
 
 
 class Fifo:
+    """A FIFO of 32-bit words.
+
+    Parameters
+    ----------
+    depth : int
+        The number of words it holds.
+
+    Attributes
+    ----------
+    depth : int
+        The number of words it holds.
+    q : collections.deque
+        The words, oldest first.
+    """
+
     def __init__(self, depth):
         self.depth = depth
         self.q = deque()
@@ -41,20 +62,76 @@ class Fifo:
         return len(self.q)
 
     def full(self):
+        """True when the FIFO holds `depth` words."""
         return len(self.q) >= self.depth
 
     def push(self, word):
+        """Append a word (masked to 32 bits).
+
+        Parameters
+        ----------
+        word : int
+            The word.
+
+        Returns
+        -------
+        bool
+            False when the FIFO is full and the word was not stored.
+        """
         if self.full():
             return False
         self.q.append(word & MASK32)
         return True
 
     def pop(self):
+        """Remove the oldest word.
+
+        Returns
+        -------
+        int or None
+            The word, or None when the FIFO is empty.
+        """
         return self.q.popleft() if self.q else None
 
 
 class Config:
-    """The configuration of one state machine, with the names of the registers it comes from."""
+    """The configuration of one state machine, with the names of the registers it comes from.
+
+    `StateMachine.configure` sets the fields; the reset values are those of the constructor.
+
+    Attributes
+    ----------
+    in_base, in_count : int
+        First pin of the IN mapping and its width (32 at reset).
+    out_base, out_count : int
+        First pin of the OUT mapping and its width (0 at reset).
+    set_base, set_count : int
+        First pin of the SET mapping and its width (0 at reset).
+    side_base : int
+        First pin of the side-set mapping.
+    jmp_pin : int
+        The pin tested by ``jmp pin`` and used by ``wait jmppin``.
+    in_right, out_right : bool
+        Shift direction of the ISR and OSR (right at reset) [verify].
+    autopush, autopull : bool
+        Automatic push and pull.
+    push_thresh, pull_thresh : int
+        The thresholds, 1 to 32 (32 at reset).
+    wrap_bottom, wrap_top : int
+        The wrap range, as absolute instruction addresses.
+    side_bits, side_opt, side_pindirs : int, bool, bool
+        The side-set field: bit count (including the enable bit of an optional side-set), optional, and whether it drives pin directions.
+    status_sel : str
+        The ``mov status`` source: ``"tx"``, ``"rx"`` or ``"irq"``.
+    status_n : int
+        The level or flag number compared by ``mov status``.
+    fifo_join : str
+        ``"none"``, ``"tx"`` or ``"rx"``; on PIO version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
+    clkdiv : float
+        The clock divider (1.0 at reset).
+    sync_bypass : bool
+        Bypass the input synchroniser.
+    """
     __slots__ = ("in_base", "in_count", "out_base", "out_count", "set_base", "set_count", "side_base", "jmp_pin", "in_right", "out_right", "autopush", "autopull", "push_thresh",
                  "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass")
 
@@ -74,6 +151,44 @@ class Config:
 
 
 class StateMachine:
+    """One state machine of a `PioBlock`, with its registers, FIFOs and `Config`.
+
+    The host side (`configure`, `enable`, `put`, `get`, `force`, `set_pc`, `reset`) mirrors what a program on the RP2040 or RP2350 does through the SDK; the instruction
+    execution is internal and driven by `PioBlock.step`.
+
+    Parameters
+    ----------
+    block : PioBlock
+        The block the state machine belongs to.
+    index : int
+        Its number, 0 to 3.
+
+    Attributes
+    ----------
+    block : PioBlock
+        The block.
+    index : int
+        The state machine number.
+    cfg : Config
+        The configuration.
+    pc : int
+        The program counter, an absolute address 0 to 31.
+    x, y, isr, osr : int
+        The scratch registers and the shift registers.
+    isr_count, osr_count : int
+        Bits shifted into the ISR and out of the OSR (the OSR is empty at 32).
+    tx, rx : Fifo
+        The FIFOs.
+    rx_regs : list of int
+        The four RX FIFO storage registers of PIO version 1.
+    enabled : bool
+        A state machine runs only after `enable`.
+    executed, stall_cycles, delay_cycles : int
+        Counters of executed instructions, stalled cycles and delay cycles.
+    rx_lost, tx_dropped : int
+        Counters of words lost by ``push noblock`` on a full RX FIFO and of words `put` dropped by a full TX FIFO.
+    """
+
     def __init__(self, block, index):
         self.block, self.index = block, index
         self.cfg = Config()
@@ -81,7 +196,9 @@ class StateMachine:
 
     # ------------------------------------------------------------------ host side
     def reset(self):
-        """Restart the state machine (SM restart and clock divider restart): registers cleared, OSR empty, FIFOs emptied, PC at the wrap bottom is not implied: set_pc()."""
+        """Restart the state machine (SM restart and clock divider restart): registers cleared, OSR empty, FIFOs emptied, PC at the wrap bottom is not implied: `set_pc`.
+
+        The state machine is left disabled."""
         self.pc = 0
         self.x = self.y = 0
         self.isr = self.osr = 0
@@ -108,7 +225,27 @@ class StateMachine:
     def configure(self, program=None, **kw):
         """Set the configuration. `program`: what `PioBlock.load()` returned (wrap range and side-set are taken from it and the PC is set to its start). Keywords: in_base, in_count,
         out_base, out_count, set_base, set_count, side_base, jmp_pin, in_shift / out_shift ("right" or "left"), autopush, autopull, push_thresh, pull_thresh, status_sel,
-        status_n, fifo_join, clkdiv, sync_bypass, side_bits, side_opt, side_pindirs, wrap_bottom, wrap_top (absolute addresses)."""
+        status_n, fifo_join, clkdiv, sync_bypass, side_bits, side_opt, side_pindirs, wrap_bottom, wrap_top (absolute addresses).
+
+        Parameters
+        ----------
+        program : Loaded or None
+            What `PioBlock.load` returned.
+        **kw :
+            The configuration keywords listed above (see `Config`).
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+
+        Raises
+        ------
+        TypeError
+            If `program` is not a `Loaded`, or a keyword is unknown.
+        ValueError
+            If a direction, threshold or FIFO join is not valid, or a join needs PIO version 1, or autopush is combined with an RX FIFO PUT / GET join.
+        """
         c = self.cfg
         if program is not None:
             if not isinstance(program, Loaded):
@@ -139,31 +276,61 @@ class StateMachine:
         return self
 
     def enable(self):
-        """Start the state machine (SM_ENABLE)."""
+        """Start the state machine (SM_ENABLE). Returns `self`."""
         self.enabled = True
         return self
 
     def disable(self):
+        """Stop the state machine (SM_ENABLE cleared). Returns `self`."""
         self.enabled = False
         return self
 
     def set_pc(self, address):
+        """Set the program counter (absolute address, masked to 5 bits). Returns `self`."""
         self.pc = address & 31
         return self
 
     def put(self, word):
-        """Write the TX FIFO as the host does; False (and counted in `tx_dropped`) when it is full."""
+        """Write the TX FIFO as the host does.
+
+        Parameters
+        ----------
+        word : int
+            The word.
+
+        Returns
+        -------
+        bool
+            False (and counted in `tx_dropped`) when the FIFO is full.
+        """
         if self.tx.push(word):
             return True
         self.tx_dropped += 1
         return False
 
     def get(self):
-        """Read the RX FIFO as the host does: the oldest word, or None when it is empty."""
+        """Read the RX FIFO as the host does.
+
+        Returns
+        -------
+        int or None
+            The oldest word, or None when the FIFO is empty.
+        """
         return self.rx.pop()
 
     def force(self, word):
-        """Execute `word` in the next cycle instead of the program (SMx_INSTR). It runs with its side-set and stalls like any instruction; the delay is applied [verify]."""
+        """Execute `word` in the next cycle instead of the program (SMx_INSTR). It runs with its side-set and stalls like any instruction; the delay is applied [verify].
+
+        Parameters
+        ----------
+        word : int
+            A 16-bit instruction word.
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+        """
         self.cur_forced = word & 0xFFFF
         return self
 
@@ -512,6 +679,14 @@ class StateMachine:
         return False
 
     def snapshot(self):
+        """The state after the last cycle, as recorded in the trace of `run_case` with ``record=True``.
+
+        Returns
+        -------
+        dict
+            The keys ``sm``, ``kind`` (``"e"`` executed, ``"s"`` stalled, ``"f"`` forced, ``"d"`` delay, ``"-"`` none yet), ``word``, ``pc_at``, ``pc``, ``x``, ``y``,
+            ``isr``, ``isr_count``, ``osr``, ``osr_count``, ``tx`` and ``rx`` (the FIFO contents as lists).
+        """
         return {"sm": self.index, "kind": self.last[0], "word": self.last[1], "pc_at": self.last[2], "pc": self.pc, "x": self.x, "y": self.y, "isr": self.isr,
                 "isr_count": self.isr_count, "osr": self.osr, "osr_count": self.osr_count, "tx": list(self.tx.q), "rx": list(self.rx.q)}
 
@@ -526,7 +701,23 @@ class _Ctx:
 
 
 class Loaded:
-    """A program placed in the instruction memory: where it is, its wrap range and side-set (program-relative), as returned by `PioBlock.load`."""
+    """A program placed in the instruction memory: where it is, its wrap range and side-set (program-relative), as returned by `PioBlock.load`.
+
+    Pass it to `StateMachine.configure` as ``program``.
+
+    Attributes
+    ----------
+    offset : int
+        The load address.
+    length : int
+        The number of instructions.
+    wrap_target, wrap : int
+        The wrap range, program-relative.
+    side_bits : int
+        The side-set field width including the enable bit of an optional side-set.
+    side_opt, side_pindirs : bool
+        Optional side-set; side-set drives pin directions.
+    """
 
     def __init__(self, offset, length, wrap_target, wrap, side_bits, side_opt, side_pindirs):
         self.offset, self.length, self.wrap_target, self.wrap = offset, length, wrap_target, wrap
@@ -538,7 +729,64 @@ class Loaded:
 
 class PioBlock:
     """One PIO block: four state machines around a shared instruction memory, the IRQ flags and the GPIO side. Pin numbers of the block are those of its 32-pin window; `gpio_base`
-    (0 or 16, RP2350B) maps them to GPIO numbers: GPIO = pin + gpio_base."""
+    (0 or 16, RP2350B) maps them to GPIO numbers: GPIO = pin + gpio_base.
+
+    Parameters
+    ----------
+    version : int
+        The PIO version: 0 (RP2040) or 1 (RP2350, RP2354).
+    gpio_base : int
+        0, or 16 on PIO version 1 (the 48-GPIO parts).
+    sync_cycles : int
+        Cycles of the input synchroniser: 2 as in the hardware [verify], 0 bypasses it.
+
+    Attributes
+    ----------
+    version, gpio_base, sync_cycles :
+        The arguments as given.
+    mem : list
+        The 32 words of the instruction memory (None for an empty word).
+    irq : int
+        The eight IRQ flags as a bit mask.
+    dirs : int
+        The pin directions of the window, one bit per pin (1 is an output).
+    ext : int
+        What the outside world drives, one bit per pin; pins the block drives as outputs are not affected.
+    sm : list of StateMachine
+        The four state machines.
+    neighbours : dict
+        ``{-1: previous block, 1: next block}`` for IRQ PREV / NEXT (PIO version 1); None where there is none.
+    cycle : int
+        The number of system clock cycles run.
+    trace : list of dict
+        The recorded cycles when `recording` is true.
+    recording : bool
+        Record a trace entry per cycle.
+
+    Raises
+    ------
+    ValueError
+        If `version` or `gpio_base` is not valid.
+
+    Examples
+    --------
+    >>> from pioweave.builder import Program, PINS
+    >>> from pioweave.emulator import PioBlock
+    >>> p = Program("square")
+    >>> with p.wrapped():
+    ...     p.set(PINS, 1, delay=1)
+    ...     p.set(PINS, 0, delay=1)
+    >>> block = PioBlock(version=0)
+    >>> sm = block.sm[0]
+    >>> sm = sm.configure(program=block.load(p), set_base=0, set_count=1).enable()
+    >>> block.dirs = 1
+    >>> levels = []
+    >>> for _ in range(8):
+    ...     block.step()
+    ...     levels.append(block.pads() & 1)
+    >>> levels
+    [1, 1, 0, 0, 1, 1, 0, 0]
+    """
 
     def __init__(self, version=0, gpio_base=0, sync_cycles=2):
         if version not in (0, 1):
@@ -560,13 +808,64 @@ class PioBlock:
         self.recording = False
 
     def neighbour(self, which):
+        """The neighbouring block for IRQ PREV / NEXT.
+
+        Parameters
+        ----------
+        which : int
+            -1 for the previous block, 1 for the next one.
+
+        Returns
+        -------
+        PioBlock or None
+            The block set in `neighbours`, or None.
+        """
         return self.neighbours.get(which)
 
     # ------------------------------------------------------------------ loading
     def load(self, program, offset=None, side=None):
         """Put a program into the instruction memory and return a `Loaded`. `program`: a pioweave.builder.Program (words, wrap and side-set are taken from it) or a list of 16-bit
         words (then give `side=(bits, optional, pindirs)` if it uses side-set; `bits` counts the enable bit of an optional side-set, as SIDESET_COUNT does). JMP targets are program-relative as pioasm writes them and are relocated by the load offset.
-        `offset`: None = the program's .origin if it has one, else the first place with room."""
+        `offset`: None = the program's .origin if it has one, else the first place with room.
+
+        Parameters
+        ----------
+        program : pioweave.builder.Program or list of int
+            The program, or its 16-bit words.
+        offset : int or None
+            The load address.
+        side : tuple or None
+            ``(bits, optional, pindirs)`` for a word list that uses side-set.
+
+        Returns
+        -------
+        Loaded
+            Where the program is and its wrap range and side-set.
+
+        Raises
+        ------
+        ValueError
+            If the program has no instruction or more than 32.
+        EmulationError
+            If there is no room for the program.
+
+        Examples
+        --------
+        >>> from pioweave.builder import Program, PINS
+        >>> from pioweave.emulator import PioBlock
+        >>> p = Program("square")
+        >>> with p.wrapped():
+        ...     p.set(PINS, 1, delay=1)
+        ...     p.set(PINS, 0, delay=1)
+        >>> block = PioBlock()
+        >>> loaded = block.load(p)
+        >>> (loaded.offset, loaded.length, loaded.wrap_target, loaded.wrap)
+        (0, 2, 0, 1)
+        >>> block.mem[:3]
+        [57601, 57600, None]
+        >>> block.load([0xE101]).offset
+        2
+        """
         if hasattr(program, "words"):
             words = program.words()
             wrap_target, wrap = program.wrap_range
@@ -597,19 +896,47 @@ class PioBlock:
         return Loaded(offset, n, wrap_target, wrap, side[0], bool(side[1]), bool(side[2]))
 
     def unload(self, loaded):
+        """Free the instruction memory of a program.
+
+        Parameters
+        ----------
+        loaded : Loaded
+            What `load` returned.
+        """
         for i in range(loaded.length):
             self.mem[loaded.offset + i] = None
 
     # ------------------------------------------------------------------ pins
     def set_input(self, pin, level):
-        """Drive an input pin from outside (a pin of the window)."""
+        """Drive an input pin from outside (a pin of the window).
+
+        Parameters
+        ----------
+        pin : int
+            The pin number in the window.
+        level : bool or int
+            The level.
+        """
         self.ext = (self.ext & ~(1 << pin)) | (int(bool(level)) << pin)
 
     def set_inputs(self, value):
+        """Drive all input pins from outside.
+
+        Parameters
+        ----------
+        value : int
+            One bit per pin of the window.
+        """
         self.ext = value & MASK32
 
     def pads(self):
-        """What is on the pads (the window): own outputs where the pin is an output, the outside world elsewhere."""
+        """What is on the pads (the window): own outputs where the pin is an output, the outside world elsewhere.
+
+        Returns
+        -------
+        int
+            One bit per pin of the window.
+        """
         return (self.out_level & self.dirs) | (self.ext & ~self.dirs & MASK32)
 
     # ------------------------------------------------------------------ running
@@ -641,6 +968,41 @@ class PioBlock:
             self.trace.append({"cycle": self.cycle - 1, "pads": self.pads(), "dirs": self.dirs, "irq": self.irq, "sms": [sm.snapshot() for sm in self.sm]})
 
     def run(self, cycles):
+        """Run the block for a number of system clock cycles (calls `step`).
+
+        Parameters
+        ----------
+        cycles : int
+            The number of cycles.
+
+        Returns
+        -------
+        PioBlock
+            `self`.
+
+        Raises
+        ------
+        EmulationError
+            If a state machine does something the hardware leaves undefined.
+
+        Examples
+        --------
+        >>> from pioweave.builder import Program, PINS
+        >>> from pioweave.emulator import PioBlock
+        >>> p = Program("square")
+        >>> with p.wrapped():
+        ...     p.set(PINS, 1, delay=1)
+        ...     p.set(PINS, 0, delay=1)
+        >>> block = PioBlock()
+        >>> _ = block.sm[0].configure(program=block.load(p), set_base=0, set_count=1).enable()
+        >>> block.dirs = 1
+        >>> block.run(2).pads()
+        1
+        >>> block.run(2).pads()
+        0
+        >>> block.cycle
+        4
+        """
         for _ in range(cycles):
             self.step()
         return self

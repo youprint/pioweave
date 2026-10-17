@@ -8,10 +8,18 @@ is one PIO instruction (one clock cycle); states without effects that follow an 
 from amaranth.hdl import Module
 from amaranth.lib import wiring
 
+__all__ = [
+    "PioDesign", "SquareWave", "PulseTrain", "ButtonPulse", "ClockedBits", "PinBranch", "HighPins", "UartTx", "UartRx", "ByteSwap", "NoBlockEcho", "PROGRAMS", "entry",
+]
+
 
 class PioDesign(wiring.Component):
     """Base class of a design for the PIO platforms: an `amaranth.lib.wiring.Component` without ports of its own (its pins come from the platform, `platform.buffer()`,
-    and its data path from `platform.shifter()`). Any Elaboratable works as well; this is the form current Amaranth recommends for a module with an interface."""
+    and its data path from `platform.shifter()`). Any Elaboratable works as well; this is the form current Amaranth recommends for a module with an interface.
+
+    The example designs of this module (`SquareWave` and the others) are subclasses; ``PROGRAMS`` maps their names to the chip, stimulus and length used by the
+    project writers and the tests.
+    """
 
     def __init__(self):
         super().__init__(wiring.Signature({}))
@@ -354,6 +362,28 @@ PROGRAMS = {
 
 
 def entry(name):
-    """(design class, chip, stimulus, cycles, options) of an example; options: tx, tx_feed, drain."""
+    """The registry entry of an example design, always with an options dict.
+
+    Parameters
+    ----------
+    name : str
+        A key of ``PROGRAMS``.
+
+    Returns
+    -------
+    tuple
+        ``(design class, chip, stimulus, cycles, options)``; `options` may hold ``tx``, ``tx_feed`` and ``drain``.
+
+    Raises
+    ------
+    KeyError
+        If `name` is not an example.
+
+    Examples
+    --------
+    >>> from pioweave.designs import entry
+    >>> entry("square_wave")
+    (<class 'pioweave.designs.SquareWave'>, 'rp2040', {}, 24, {})
+    """
     e = PROGRAMS[name]
     return (e + ({},))[:5] if len(e) == 4 else e

@@ -27,6 +27,8 @@ from amaranth.sim import Simulator
 
 from ._compat import Fragment, clock_period
 
+__all__ = ["SimOptions", "PioProjectError", "find_pioasm", "amaranth_run", "amaranth_waves", "write_project"]
+
 
 @dataclasses.dataclass
 class SimOptions:
@@ -34,7 +36,23 @@ class SimOptions:
 
     `factory`: a callable returning a fresh `(design, platform)` pair (a design requests its pins from the platform when it is elaborated, so every run needs new
     ones); without it the project has no expectations. `cycles`: length of the simulation. `stim`: input waveforms {gpio: "0101..."}. `tx`: words in the TX FIFO at
-    cycle 0. `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them. `drain`: the host empties the RX FIFO every cycle."""
+    cycle 0. `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them. `drain`: the host empties the RX FIFO every cycle.
+
+    Parameters
+    ----------
+    factory : callable or None
+        Returns a fresh ``(design, platform)`` pair.
+    cycles : int
+        Length of the simulation.
+    stim : dict
+        Input waveforms ``{gpio: "0101..."}``, one character per cycle; the last character repeats.
+    tx : tuple of int
+        Words in the TX FIFO at cycle 0.
+    tx_feed : tuple of tuple
+        ``(cycle, word)`` pairs written by the host.
+    drain : bool
+        The host empties the RX FIFO every cycle.
+    """
     factory: object = None
     cycles: int = 64
     stim: dict = dataclasses.field(default_factory=dict)
@@ -44,11 +62,17 @@ class SimOptions:
 
 
 class PioProjectError(Exception):
-    """The project cannot be written."""
+    """The project cannot be written (an unknown project kind)."""
 
 
 def find_pioasm():
-    """pioasm: the PIOASM environment variable, the PATH, or next to the running Python (bitweave puts it in the bin directory of its tools environment)."""
+    """Find pioasm: the ``PIOASM`` environment variable, the ``PATH``, or next to the running Python (bitweave puts it in the bin directory of its tools environment).
+
+    Returns
+    -------
+    str or None
+        The absolute path, or None when pioasm was not found.
+    """
     for c in (os.environ.get("PIOASM"), shutil.which("pioasm"), os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pioasm")):
         if c and os.path.exists(c):
             return os.path.abspath(c)
@@ -57,15 +81,41 @@ def find_pioasm():
 
 # ----------------------------------------------------------------------------- reference simulation (Amaranth)
 def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
-    """Simulate the design built by `factory() -> (design, platform)` for `cycles` clock cycles.
-
-    Returns {"waves": {gpio: waveform} for every output GPIO, "rx": [(cycle, word)] pushed to the RX FIFO, "rx_left": words still in it, "tx_left": words
-    still in the TX FIFO}. `tx`: words in the TX FIFO at cycle 0; `tx_feed`: [(cycle, word)] written by the host so that the instruction of that cycle sees them;
-    `drain`: the host empties the RX FIFO every cycle (the default, as bitweave's simulator does).
+    """Simulate the design built by `factory` with the Amaranth simulator.
 
     Alignment with the PIO model: the FSM state in cycle t does what the instruction executed in cycle t does; outputs are registers, so the value
     sampled after the t-th clock edge is the pad level of cycle t. Inputs are set before the edge of cycle t and are what the instruction of
-    cycle t reads."""
+    cycle t reads.
+
+    Parameters
+    ----------
+    factory : callable
+        Returns a fresh ``(design, platform)`` pair.
+    cycles : int
+        The number of clock cycles.
+    stim : dict or None
+        Input waveforms ``{gpio: "0101..."}``, one character per cycle; the last character repeats.
+    tx : iterable of int
+        Words in the TX FIFO at cycle 0.
+    tx_feed : iterable of tuple
+        ``(cycle, word)`` pairs written by the host so that the instruction of that cycle sees them.
+    drain : bool
+        The host empties the RX FIFO every cycle (the default, as bitweave's simulator does).
+
+    Returns
+    -------
+    dict
+        ``{"waves": {gpio: waveform}`` for every output GPIO, ``"rx": [(cycle, word)]`` pushed to the RX FIFO, ``"rx_left"``: words still in it, ``"tx_left"``:
+        words still in the TX FIFO``}``.
+
+    Examples
+    --------
+    >>> from pioweave.designs import SquareWave
+    >>> from pioweave.platform import RP2040PioPlatform
+    >>> from pioweave.project import amaranth_run
+    >>> amaranth_run(lambda: (SquareWave(), RP2040PioPlatform()), 8)
+    {'waves': {0: '11001100'}, 'rx': [], 'rx_left': 0, 'tx_left': 0}
+    """
     design, platform = factory()
     platform.simulation = True
     feeds = sorted((c, w) for c, w in tx_feed if c > 0)
@@ -120,7 +170,22 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
 
 
 def amaranth_waves(factory, cycles, stim=None):
-    """The pin waveforms of `amaranth_run` ({gpio: waveform} for every output GPIO)."""
+    """The pin waveforms of `amaranth_run`.
+
+    Parameters
+    ----------
+    factory : callable
+        Returns a fresh ``(design, platform)`` pair.
+    cycles : int
+        The number of clock cycles.
+    stim : dict or None
+        Input waveforms ``{gpio: "0101..."}``.
+
+    Returns
+    -------
+    dict
+        ``{gpio: waveform}`` for every output GPIO.
+    """
     return amaranth_run(factory, cycles, stim)["waves"]
 
 
@@ -289,6 +354,29 @@ def _readme(compiled, name, project, platform, have_golden):
 
 
 def write_project(plan, compiled, platform, name, project, sim=None):
+    """Add the files of a project to a build plan.
+
+    Parameters
+    ----------
+    plan : amaranth.build.run.BuildPlan
+        The plan the files are added to.
+    compiled : pioweave.compile.Compiled
+        The compiled design.
+    platform : pioweave.platform.RP2040PioPlatform
+        The platform the design was compiled for.
+    name : str
+        The program and project name.
+    project : str
+        ``"pio"`` (``NAME.pio``, ``bitweave.toml`` with a simulation case, ``README.md``), ``"pico-c"`` (and a Pico SDK C project) or ``"micropython"`` (and
+        ``NAME_pio.py`` written by pioasm, and ``main.py``).
+    sim : SimOptions or None
+        Feeds the reference simulation whose waveforms become the expectations in ``bitweave.toml``; None writes the case without expectations.
+
+    Raises
+    ------
+    PioProjectError
+        If `project` is not one of the three kinds.
+    """
     if project not in ("pio", "pico-c", "micropython"):
         raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'")
     sim = sim or SimOptions()
