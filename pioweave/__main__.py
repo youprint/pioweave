@@ -3,6 +3,8 @@
 
     python -m pioweave list
     python -m pioweave doctor [--strict]
+    python -m pioweave new NAME [--template TEMPLATE] [--dir PARENT]      (new --list shows the templates)
+    python -m pioweave --version
     python -m pioweave build DESIGN OUTDIR [--chip CHIP] [--project pio|pico-c|micropython] [--clock-hz N] [--cycles N] [--stim GPIO=WAVE ...] [--name NAME]
 
 DESIGN is an example name (see `list`) or `module:Class` of an Amaranth Elaboratable. The project is written to OUTDIR/project and `EMIT {"path": ".../NAME.pio"}`
@@ -73,6 +75,37 @@ def _emulate(a):
     return 0
 
 
+# ----------------------------------------------------------------------------- `new`: kept apart from the other commands
+
+def _add_new_parser(sub):
+    n = sub.add_parser("new", help="create a project directory from a template (see `new --list`)")
+    n.add_argument("name", nargs="?", help="project name (letters, digits, - and _)")
+    n.add_argument("--template", default="blink", help="template name (default blink)")
+    n.add_argument("--dir", default=".", help="the directory in which to create the project (default: the current directory)")
+    n.add_argument("--list", action="store_true", help="list the templates")
+
+
+def _new(a):
+    from . import scaffold
+    if a.list:
+        print("\n".join("%-15s %s" % (k, scaffold.TEMPLATES[k][0]) for k in scaffold.template_names()))
+        return 0
+    if not a.name:
+        raise SystemExit("give a project name, for example: python -m pioweave new my-blink   (python -m pioweave new --list shows the templates)")
+    try:
+        files = scaffold.scaffold(a.name, a.template, a.dir)
+    except scaffold.ScaffoldError as e:
+        raise SystemExit("error: %s" % e)
+    print("created %s with %s" % (os.path.dirname(files[0]), ", ".join(os.path.basename(f) for f in files)))
+    print("next: cd %s && python -m unittest" % os.path.dirname(files[0]))
+    return 0
+
+
+def _version():
+    from . import __version__
+    return "pioweave %s" % __version__
+
+
 def main(argv=None):
     """Run the command line (see the module documentation).
 
@@ -87,7 +120,9 @@ def main(argv=None):
         The exit code.
     """
     ap = argparse.ArgumentParser(prog="python -m pioweave", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--version", action="version", version=_version())
     sub = ap.add_subparsers(dest="cmd", required=True)
+    _add_new_parser(sub)
     sub.add_parser("list", help="list the example designs")
     em = sub.add_parser("emulate", help="run a design in the PIO emulator and print the pin waveforms and the words received")
     em.add_argument("design")
@@ -113,6 +148,8 @@ def main(argv=None):
     b.add_argument("--no-drain", action="store_true", help="the host does not empty the RX FIFO (it can fill up)")
     b.add_argument("--name")
     a = ap.parse_args(argv)
+    if a.cmd == "new":
+        return _new(a)
     if a.cmd == "emulate":
         return _emulate(a)
     if a.cmd == "doctor":

@@ -43,7 +43,7 @@ distribution = true
 
 [tool.pdm.build]
 includes = ["pioweave"]
-source-includes = ["tests", "docs", "LICENSE.txt", "CONTRIBUTING.txt", "README.md"]
+source-includes = ["tests", "docs", "examples", "scripts", "CHANGELOG.rst", "LICENSE.txt", "CONTRIBUTING.txt", "README.md"]
 
 # Development workflow configuration
 

@@ -24,6 +24,7 @@ Host software only: nothing here runs on a chip or in an FPGA.
         set pins, 0 [1]
     .wrap
 """
+import re
 from contextlib import contextmanager
 
 __all__ = [
@@ -34,6 +35,24 @@ __all__ = [
 # the RP2354 is an RP2350 with 2 MB of flash in the package; the A (QFN-60, 30 GPIOs) and B (QFN-80, 48 GPIOs) variants differ only in the pinout (RP2350 datasheet, Table 1)
 CHIP_VERSION = {"rp2040": 0, "rp2350": 1, "rp2350a": 1, "rp2350b": 1, "rp2354": 1, "rp2354a": 1, "rp2354b": 1}
 MEMORY_WORDS = 32                                         # shared instruction memory of one PIO block
+
+
+# (regular expression searched in the message, hint appended to it): what to change for the most common mistakes. The message itself is never changed.
+_HINTS = [
+    (r"more than \d+ instructions", "split the program, or let loops and delays do the repeating (a delay [n] or a jmp x-- loop costs no extra word); the 32 words are shared by the four state machines of a block"),
+    (r"mandatory side-set: give side=", "give side= on every instruction, or create the Program with side_opt=True so that it may be left out"),
+    (r"side= given but the program has side_set=0", "create the Program with side_set=N (the number of side-set bits)"),
+    (r"^delay \(|leaves no room", "the delay and the side-set share 5 bits: use fewer side-set bits or a smaller delay (a nop can carry the rest of a long delay)"),
+    (r"jmp to undefined label", "define the label with p.label(name) just before the instruction it should point at"),
+    (r"label .* is defined twice", "give every label a unique name"),
+    (r"label .* points past the last instruction|wrap_target points past", "add an instruction after the label"),
+    (r"needs PIO version 1", "use chip='rp2350' (or rp2350a, rp2350b, rp2354) for this form; the RP2040 has PIO version 0"),
+    (r"must come before the first instruction", "move this directive above the first instruction of the program"),
+    (r"has no instructions", "add at least one instruction before calling pio_text(), words() or write_pio()"),
+    (r"wait gpio uses GPIOs below 16", "keep the GPIOs of one program inside GPIO 0..31 or inside GPIO 16..47 (the PIO sees a window of 32 pins)"),
+    (r"jmp target address \d+ is beyond", "a numeric target is an instruction index inside the program; use a label instead"),
+    (r"^chip .* use rp2040", "pass chip='rp2040' or chip='rp2350'"),
+]
 
 
 class PioError(ValueError):
@@ -50,6 +69,14 @@ class PioError(ValueError):
       ...
     pioweave.builder.program.PioError: set value must be an integer from 0 to 31, got 32
     """
+
+    def __init__(self, message=""):
+        message = str(message)
+        for pattern, hint in _HINTS:
+            if re.search(pattern, message):
+                message += "\n  hint: " + hint
+                break
+        super().__init__(message)
 
 
 class _Name:

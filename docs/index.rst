@@ -8,6 +8,7 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    :caption: Contents
 
    getting-started
+   examples
    designing-for-pio
    data-path
    builder
@@ -16,6 +17,7 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    projects
    compatibility
    testing
+   releasing
    reference/index
    design-notes/README
 

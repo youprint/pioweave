@@ -297,7 +297,7 @@ def _decorator(compiled):
 
 def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=()):
     if pioasm is None:
-        raise PioProjectError("project='micropython' needs pioasm to write the MicroPython program (set PIOASM or put pioasm on the PATH)")
+        raise PioProjectError("project='micropython' needs pioasm to write the MicroPython program (set PIOASM or put pioasm on the PATH)\n  hint: build pioasm from the Pico SDK (tools/pioasm), or use project='pio' or 'pico-c', which do not need it")
     d = tempfile.mkdtemp(prefix="pio_mp_")
     try:
         src = os.path.join(d, name + ".pio")
@@ -306,7 +306,7 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=()):
         out = os.path.join(d, name + "_pio.py")
         r = subprocess.run([pioasm, "-v", str(platform.pio_version), "-o", "python", src, out], capture_output=True, text=True)
         if r.returncode != 0:
-            raise PioProjectError("pioasm failed:\n" + r.stderr)
+            raise PioProjectError("pioasm failed:\n" + r.stderr + "\n  hint: run `python -m pioweave doctor` to see which pioasm was found; the .pio file is written first and can be assembled by hand")
         with open(out) as fh:
             text = fh.read()
     finally:
@@ -378,7 +378,7 @@ def write_project(plan, compiled, platform, name, project, sim=None):
         If `project` is not one of the three kinds.
     """
     if project not in ("pio", "pico-c", "micropython"):
-        raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'")
+        raise PioProjectError("project must be 'pio', 'pico-c' or 'micropython'\n  hint: pass project=\"pio\" for just the .pio file and the bitweave case")
     sim = sim or SimOptions()
     factory, cycles, stim, tx, tx_feed, drain = sim.factory, sim.cycles, sim.stim, tuple(sim.tx), tuple(sim.tx_feed), sim.drain
     run = amaranth_run(factory, cycles, stim, tx, tx_feed, drain) if factory is not None else None

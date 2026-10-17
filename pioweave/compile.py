@@ -63,7 +63,33 @@ def _where(loc):
     return ""
 
 
+# (regular expression searched in the message, hint appended to it): what to change for the most common mistakes. The message itself is never changed.
+_HINTS = [
+    (r"expected exactly one m\.FSM\(\)", "write the whole design as one `with m.FSM():` block; one FSM state is one PIO instruction"),
+    (r"logic outside the FSM", "move the assignments into the states of the FSM; the PIO has no logic of its own outside the instructions"),
+    (r"combinational logic", "assign with m.d.sync inside an FSM state (the value takes effect with the instruction); the PIO has no combinational paths"),
+    (r"submodules are not supported", "use one Module: build the pins with platform.buffer() and the registers with platform.scratch(), not with submodules"),
+    (r"clock domain .* is not supported", "use m.d.sync only; the whole design runs in the PIO state machine clock"),
+    (r"m\.next names a state that is never defined", "check the spelling: every m.next must name a state created with m.State(\"NAME\")"),
+    (r"statement .* is not supported", "use m.If / m.Else, m.d.sync assignments and m.next inside FSM states; see docs/designing-for-pio.rst for what compiles"),
+    (r"is not a pin from platform\.request", "get pins from platform.buffer(m, ...) or platform.request(...) and the two registers from platform.scratch(\"x\") and platform.scratch(\"y\")"),
+    (r"the test uses signal .* not an input pin", "a test can only look at an input pin or at X or Y; copy the value into x or y in an earlier state"),
+    (r"compound tests", "split the test: check the first condition in one state and the second in the next state"),
+    (r"this test cannot be done by one PIO instruction", "compare X or Y with 0, X with Y, or test one input pin; anything else needs several states"),
+    (r"more than one test in a state", "put each test in a state of its own and chain the states with m.next"),
+    (r"not consecutive GPIOs", "request the pins as one resource with consecutive GPIO numbers (for example gpio 4 to 7)"),
+    (r"do not fit one 32-GPIO window", "keep all the pins of one design inside GPIO 0..31 or inside GPIO 16..47 (RP2350B only)"),
+    (r"must start in the state that is defined first", "define the state the FSM should start in first; the reset state of the FSM must be the first one"),
+    (r"output pin .* resets to \d+ but", "give the pin the init value 0, or assign the wanted level in the first state"),
+    (r"needs two PIO instructions", "split the state in two and chain them with m.next; every PIO instruction takes one cycle, so the design needs one more cycle there"),
+]
+
+
 def _fail(msg, loc=None):
+    for pattern, hint in _HINTS:
+        if re.search(pattern, msg):
+            msg += "\n  hint: " + hint
+            break
     raise PioCompileError(_where(loc) + msg)
 
 

@@ -66,7 +66,8 @@ def check_version(version=None, allow=None):
         ok = False
     if not ok and not allow:
         raise UnsupportedAmaranth("pioweave was tested with Amaranth %s and %s; found %s. Its compiler reads Amaranth's internals. "
-                                  "Set PIOWEAVE_ALLOW_UNTESTED=1 to try anyway." % (TESTED, ", ".join(TESTED_DEV), v))
+                                  "Set PIOWEAVE_ALLOW_UNTESTED=1 to try anyway.\n  hint: install a tested version with pip install 'amaranth>=0.5,<0.6'; "
+                                  "scripts/matrix.sh shows what the tests say about other versions." % (TESTED, ", ".join(TESTED_DEV), v))
     return ok
 
 
