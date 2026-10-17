@@ -1,8 +1,7 @@
 on:
-  push:
-  pull_request:
-  schedule:
-  - cron: '0 0 * * *' # test daily against git HEAD of Amaranth
+  # Runs only when started by hand (Actions tab, or `gh workflow run CI`) while there are no Actions minutes to spend. To run on every push, a pull request and daily
+  # against the git HEAD of Amaranth, as amaranth-soc does, list `push:`, `pull_request:` and `schedule: - cron: '0 0 * * *'` here again.
+  workflow_dispatch:
 
 name: CI
 jobs:
