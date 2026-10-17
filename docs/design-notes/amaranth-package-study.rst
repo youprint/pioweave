@@ -93,7 +93,7 @@ Convention says ``amaranth-<thing>`` / ``amaranth_<thing>``; that prefix suggest
 - Public entry points: the builder API and ``RP2040PioPlatform ... RP2354BPioPlatform``; ``Program`` stays free of Amaranth imports in P2.
 - Command line: ``python -m bitweave_pio build DESIGN --chip ... --project ...`` replaces the two generator scripts and is what a bitweave ``generator = [...]`` calls.
 - Tests move to ``tests/`` of each package; the co-simulation needs the bitweave binary and pioasm, and is skipped when they are missing (as today).
-- Typing and docs: ``py.typed``, docstrings, the two design notes as the manual.
+- Typing and docs: docstrings (no ``py.typed``: the code is not annotated), the two design notes as the manual.
 - Licence and headers: as in LICENSE; no third-party code is copied (the grammar facts of pioasm and the datasheets are read as facts).
 
 6. Migration steps and effort for P2 + P4 [estimate]

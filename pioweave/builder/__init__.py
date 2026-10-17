@@ -9,4 +9,4 @@ from .program import (ALWAYS, CHIP_VERSION, CLEAR, EXEC, INVERT, ISR, MEMORY_WOR
 
 __all__ = ["ALWAYS", "CHIP_VERSION", "CLEAR", "EXEC", "INVERT", "ISR", "MEMORY_WORDS", "NONE", "NOT_OSRE", "NOT_X", "NOT_Y", "NULL", "OSR", "PC", "PIN", "PINDIRS",
            "PINS", "REVERSE", "SET", "STATUS", "WAIT", "X", "X_DEC", "X_NE_Y", "Y", "Y_DEC", "PioError", "Program", "write_pio"]
-__version__ = "0.1.0"
+from .. import __version__  # noqa: E402  (from the package metadata, which comes from the git tag)

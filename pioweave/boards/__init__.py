@@ -5,4 +5,4 @@ Pin numbers come from the board headers of the Pico SDK (``src/boards/include/bo
 is available. Nothing here has run on a board.
 """
 __all__ = []
-__version__ = "0.1.0"
+from .. import __version__  # noqa: E402  (from the package metadata, which comes from the git tag)

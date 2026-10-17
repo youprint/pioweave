@@ -64,6 +64,6 @@ The test matrix
 Standards followed and not followed
 -----------------------------------
 
-Followed: a ``Platform`` subclass per target with ``resources``, ``connectors``, ``required_tools``; ``build()`` with the standard signature; ``amaranth.lib.io.Buffer`` with ``request(..., dir="-")``; ``amaranth.lib.wiring`` components for designs and for the FIFO model; one board module per board; a flat package directory (no ``src/``), ``tests/``, ``docs/`` and ``py.typed``, as ``amaranth-soc`` and ``amaranth-boards`` have; a PEP 621 ``pyproject.toml`` with the ``pdm-backend`` build backend; an Amaranth version range in the metadata.
+Followed: a ``Platform`` subclass per target with ``resources``, ``connectors``, ``required_tools``; ``build()`` with the standard signature; ``amaranth.lib.io.Buffer`` with ``request(..., dir="-")``; ``amaranth.lib.wiring`` components for designs and for the FIFO model; one board module per board; a flat package directory (no ``src/``), ``tests/`` and ``docs/``, as ``amaranth-soc`` and ``amaranth-boards`` have (no ``py.typed``: the code has no type annotations, and amaranth-soc ships no marker either); a PEP 621 ``pyproject.toml`` with the ``pdm-backend`` build backend; an Amaranth version range in the metadata.
 
 Not followed: the compiler uses Amaranth internals (above); the platform's ``build()`` takes ``sim=SimOptions(...)`` and ``project=`` beyond the standard arguments; the package name does not carry the ``amaranth-`` prefix, which would suggest an official Amaranth package.
