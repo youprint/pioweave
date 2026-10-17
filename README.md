@@ -8,7 +8,7 @@ Nothing here has run on a chip.
 |---|---|---|---|
 | `builder/` amaranth-rp-builder | `amaranth_rp_builder` | nothing | Python builder for PIO programs for the RP2040, RP2350, RP2354 and A / B variants: one method per instruction, its own encoder, pioasm text. Note: `docs/pio-dsl.md` |
 | `boards/` amaranth-rp-boards | `amaranth_rp_boards` | amaranth-rp | Board definitions, one module per board like amaranth-boards: Raspberry Pi Pico (RP2040, the owner's RP2040 target), Pico 2, Waveshare Core2350B, with named `led`, `uart_*`, `i2c_*` and `spi_*` pins from the Pico SDK headers and the SDK board name for the firmware flow |
-| `rp/` amaranth-rp | `amaranth_rp` | amaranth 0.5.10 (0.5.x), the builder | Amaranth platforms (`RP2040PioPlatform` ... `RP2354BPioPlatform`), FSM-to-PIO compiler, project writers (`pio`, `pico-c`, `micropython`), reference simulation. Note: `docs/amaranth-pio.md`. `_compat.py` is the only file that touches Amaranth's private IR and checks the version |
+| `rp/` amaranth-rp | `amaranth_rp` | amaranth 0.5.x and the 0.6 development version, the builder | Amaranth platforms (`RP2040PioPlatform` ... `RP2354BPioPlatform`), FSM-to-PIO compiler, project writers (`pio`, `pico-c`, `micropython`), reference simulation. Note: `docs/amaranth-pio.md`. `_compat.py` is the only file that touches Amaranth's private IR and checks the version |
 
 Command lines: `python -m amaranth_rp_builder emit square build/`, `python -m amaranth_rp build square_wave build/ --project pico-c`, `python -m amaranth_rp list`.
 
@@ -23,8 +23,10 @@ The rp tests need the built `bitweave` (`target/release/bitweave`) and `pioasm` 
 passed, when missing (`BITWEAVE`, `PIOASM`). Generated Pico SDK projects are built only with `PIO_BUILD_FIRMWARE=1` and the SDK and `arm-none-eabi-gcc` under `.tools`.
 `BITWEAVE_PYTHON` names this directory for `bitweave install rp-pio` when the binary is not inside the repository.
 
-`python/scripts/matrix.sh 0.5.10 [other versions]` runs the tests against given Amaranth versions in fresh environments; only 0.5.10 exists in the 0.5 series on PyPI (checked 2026-10-17) and
-another version is refused by pip (package metadata) and by the version gate (shown for 0.5.9 and 0.4.0).
+`python/scripts/matrix.sh 0.5.1 0.5.10 git:COMMIT` runs the tests against given Amaranth versions in fresh environments (`MATRIX_QUICK=1`: only the quick tests; `PIO_BUILD_FIRMWARE=1`: also the Pico SDK builds).
+There is no 0.6 beta release (PyPI has no pre-release and the newest tag is v0.6.0.dev0), so 0.6 is tested as the development version at a pinned commit (`_compat.TESTED_DEV`). Results of 2026-10-17:
+the whole suite (166 tests, with the Pico SDK builds) passes on Amaranth 0.5.1, 0.5.10 and 0.6.0.dev140 (commit 90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7); the quick suite (72 tests plus the instruction
+words of all ten examples) passes on 0.5.0, 0.5.2 to 0.5.9 as well; versions outside that (0.4.x, 0.5.11, other 0.6 development versions) are refused by pip (package metadata) and by the version gate.
 
 ## Verification (2026-10-17)
 
@@ -35,4 +37,4 @@ another version is refused by pip (package metadata) and by the version gate (sh
   their cycles and FIFO contents; not built yet: autopull/autopush, `mov` with OSR/ISR, `irq`, joined FIFOs (see `docs/amaranth-pio.md` section 2a);
 - the generated bitweave cases pass; three generated Pico SDK C projects (RP2040, RP2350, RP2350B with GPIO base 16) build to a UF2 with the real SDK.
 
-Not verified: any run on a chip; the MicroPython output (rp2 API names from the documentation); Amaranth versions other than 0.5.10; PyPI publication (not planned, licence is proprietary).
+Not verified: any run on a chip; the MicroPython output (rp2 API names from the documentation); Amaranth versions other than those listed above (the 0.6 development version is a moving target: a later commit may break the compiler); PyPI publication (not planned, licence is proprietary).

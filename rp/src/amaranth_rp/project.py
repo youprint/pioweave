@@ -24,7 +24,7 @@ import tempfile
 from amaranth.hdl import ClockDomain, Module
 from amaranth.sim import Simulator
 
-from ._compat import Fragment
+from ._compat import Fragment, clock_period
 
 
 class PioProjectError(Exception):
@@ -97,7 +97,7 @@ def amaranth_run(factory, cycles, stim=None, tx=(), tx_feed=(), drain=True):
             state["tx_left"] = ctx.get(fifo.host_tx_level)
 
     sim = Simulator(top)
-    sim.add_clock(1e-6)
+    sim.add_clock(clock_period())
     sim.add_testbench(tb)
     sim.run()
     return {"waves": {g: "".join(v) for g, v in waves.items()}, "rx": rx, "rx_left": state.get("rx_left", 0), "tx_left": state.get("tx_left", 0)}

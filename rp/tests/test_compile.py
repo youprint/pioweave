@@ -421,3 +421,17 @@ def test_random_data_path_designs_match_the_pio_simulator(seed):
     assert {g: w for g, w in a["waves"].items() if g in b["waves"]} == b["waves"], why
     assert cosim.same_rx(a, b, spec["drain"]), why
     assert (a["tx_left"], a["rx_left"]) == (b["tx_left"], b["rx_left"]), why
+
+
+# ----------------------------------------------------------------------------- the same programs on every Amaranth version
+def test_example_programs_are_the_same_on_every_amaranth_version():
+    """python/rp/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
+    The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently."""
+    import json
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "example_programs.json")) as fh:
+        want = json.load(fh)
+    assert sorted(want) == sorted(pio_designs.PROGRAMS)
+    for name, ref in want.items():
+        cls, chip, stim, cycles, opts = pio_designs.entry(name)
+        c = compile_factory(lambda cls=cls, chip=chip: (cls(), PLATFORMS[chip]()), name)
+        assert {"chip": chip, "words": c.program.words(), "sim_config": c.sim_config()} == ref, name

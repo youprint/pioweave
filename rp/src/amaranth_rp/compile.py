@@ -31,7 +31,7 @@ from amaranth.lib import io
 from amaranth_rp_builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, NULL, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
 
 from . import data as D
-from ._compat import Fragment, ast
+from ._compat import Fragment, ast, fsm_state_names
 
 MAX_SIDE_BITS = 4      # with the enable bit of an optional side-set (5 bits shared with the delay)
 
@@ -124,7 +124,7 @@ class Compiled:
 
 def _state_signal_and_cases(frag):
     sync = list(frag.statements.get("sync", []))
-    fsms = [s for s in sync if isinstance(s, ast.Switch) and isinstance(s.test, Signal) and s.test.decoder is not None and "/" in str(s.test.decoder(0))]
+    fsms = [s for s in sync if isinstance(s, ast.Switch) and isinstance(s.test, Signal) and fsm_state_names(s.test)]
     others = [s for s in sync if s not in fsms]
     if len(fsms) != 1:
         _fail("expected exactly one m.FSM() in the design, found %d" % len(fsms))
@@ -144,7 +144,7 @@ def _check_fragment(frag):
             _fail("clock domain %r is not supported: the PIO clock is the only domain (sync)" % dom)
         for s in stmts:     # m.FSM creates comb flags for m.ongoing(); anything else is real combinational logic
             ok = isinstance(s, ast.Assign) and isinstance(s.rhs, ast.Operator) and s.rhs.operator == "==" and any(
-                isinstance(o, Signal) and o.decoder is not None for o in s.rhs.operands)
+                isinstance(o, Signal) and fsm_state_names(o) for o in s.rhs.operands)
             if not ok:
                 _fail("combinational logic (m.d.comb) is not supported", getattr(s, "src_loc", None))
 
@@ -385,7 +385,8 @@ def compile_design(top, platform, name="top"):
     if order[0] != 0 or state_sig.init != 0:
         _fail("the FSM must start in the state that is defined first")
     ctx.pos = {sid: k for k, sid in enumerate(order)}
-    names = [str(state_sig.decoder(sid)).split("/")[0] for sid in order]
+    state_names = fsm_state_names(state_sig)
+    names = [state_names[sid].rsplit("/", 1)[0] for sid in order]
     trees = [_exec(bodies[sid], ctx, None, {}, _user_loc(case_loc[sid], None)) for sid in order]
     for sig in list(platform._scratch.values()):
         if sig.init != 0:

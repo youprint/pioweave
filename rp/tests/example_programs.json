@@ -1,0 +1,158 @@
+{
+ "button_pulse": {
+  "chip": "rp2350",
+  "sim_config": {
+   "dirs": 1,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   8324,
+   57857,
+   57344,
+   8196
+  ]
+ },
+ "byte_swap": {
+  "chip": "rp2350",
+  "sim_config": {
+   "dirs": 0,
+   "in_shift": "left",
+   "out_shift": "left"
+  },
+  "words": [
+   32928,
+   24616,
+   24648,
+   16496,
+   16456,
+   16424,
+   32800
+  ]
+ },
+ "clocked_bits": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 3,
+   "set_base": 0,
+   "set_count": 1,
+   "sideset_base": 1
+  },
+  "words": [
+   57345,
+   47170,
+   61440,
+   47170,
+   61441,
+   47170
+  ]
+ },
+ "high_pins": {
+  "chip": "rp2350b",
+  "sim_config": {
+   "dirs": 50331648,
+   "gpio_base": 16,
+   "set_base": 24,
+   "set_count": 1,
+   "sideset_base": 25
+  },
+  "words": [
+   77964,
+   63745,
+   61440,
+   73740
+  ]
+ },
+ "noblock_echo": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 0,
+   "in_shift": "right",
+   "out_shift": "right"
+  },
+  "words": [
+   57397,
+   33152,
+   24640,
+   16448,
+   32768
+  ]
+ },
+ "pin_branch": {
+  "chip": "rp2350",
+  "sim_config": {
+   "dirs": 1,
+   "jmp_pin": 4,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   196,
+   57345,
+   57600,
+   0,
+   57345,
+   57344,
+   57345,
+   57344
+  ]
+ },
+ "pulse_train": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 1,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   57378,
+   57601,
+   57600,
+   65,
+   41538
+  ]
+ },
+ "square_wave": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 1,
+   "set_base": 0,
+   "set_count": 1
+  },
+  "words": [
+   57601,
+   57600
+  ]
+ },
+ "uart_rx": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 0,
+   "in_base": 4,
+   "in_shift": "right"
+  },
+  "words": [
+   8196,
+   59943,
+   17921,
+   66,
+   32800
+  ]
+ },
+ "uart_tx": {
+  "chip": "rp2040",
+  "sim_config": {
+   "dirs": 1,
+   "out_base": 0,
+   "out_count": 1,
+   "out_shift": "right",
+   "sideset_base": 0
+  },
+  "words": [
+   39328,
+   61479,
+   24577,
+   66
+  ]
+ }
+}

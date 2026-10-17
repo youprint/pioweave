@@ -24,7 +24,7 @@ In a scratch virtual environment with Amaranth main (0.6.0.dev140) and `AMARANTH
 - unchanged amaranth-rp fails on every design at its first check (the state-name lookup);
 - with a ten-line shim that restores `Signal.decoder` from `_format._variants`, all ten example designs (six without and four with the data path) compile to exactly the same instruction words as on 0.5.10, and the Amaranth reference simulation of the four data-path designs runs and gives the same number of received words (2, 2, 7).
 
-Not run: the full test suite and the co-simulation against 0.6.0.dev140; later 0.6 development versions.
+Afterwards (same day): the adapter layer of option A was implemented, and the whole test suite passes on 0.5.1, 0.5.10 and 0.6.0.dev140 (see python/README.md). Not run: later 0.6 development versions.
 
 ## Options
 

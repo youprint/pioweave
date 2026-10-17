@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     "Typing :: Typed",
 ]
-dependencies = ["amaranth>=0.5.10,<0.6", "amaranth-rp-builder==0.1.0"]
+dependencies = ["amaranth>=0.5,<0.6", "amaranth-rp-builder==0.1.0"]
 
 [project.urls]
 "Source Code" = "https://github.com/youprint/bitweave/tree/main/python"
