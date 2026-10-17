@@ -120,6 +120,8 @@ def run_case(program, cycles, version=0, stim=None, tx=(), tx_feed=(), drain=Tru
     ------
     EmulationError
         If the program does something the hardware leaves undefined and `on_error` is ``"raise"``.
+    ValueError
+        If `cycles` is negative, or a waveform of `stim` is empty or has other characters than 0 and 1, or a configuration value is out of range.
 
     Examples
     --------
@@ -135,6 +137,11 @@ def run_case(program, cycles, version=0, stim=None, tx=(), tx_feed=(), drain=Tru
     >>> result.executed
     4
     """
+    if isinstance(cycles, bool) or not isinstance(cycles, int) or cycles < 0:
+        raise ValueError("cycles is a whole number of at least 0, not %r" % (cycles,))
+    for pin, w in (stim or {}).items():
+        if not isinstance(pin, int) or not 0 <= pin <= 31 or not isinstance(w, str) or not w or w.strip("01"):
+            raise ValueError("stim is {pin: waveform} with a pin from 0 to 31 and a non-empty string of 0 and 1, not %r: %r" % (pin, w))
     side = config.pop("side", None)
     block = PioBlock(version=version, gpio_base=gpio_base, sync_cycles=sync_cycles)
     loaded = block.load(program, side=side)

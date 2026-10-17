@@ -268,7 +268,7 @@ class StateMachine:
         TypeError
             If `program` is not a `Loaded`, or a keyword is unknown.
         ValueError
-            If a direction, threshold or FIFO join is not valid, or a join needs PIO version 1, or autopush is combined with an RX FIFO PUT / GET join.
+            If a direction, threshold, pin base, pin count or FIFO join is not valid, or a join needs PIO version 1, or autopush is combined with an RX FIFO PUT / GET join.
         """
         c = self.cfg
         join_before = c.fifo_join
@@ -299,6 +299,11 @@ class StateMachine:
             raise ValueError("MOV status from an IRQ flag is a PIO version 1 feature")
         if not 1.0 <= c.clkdiv <= 65536.0:
             raise ValueError("clkdiv is 1 to 65536")
+        for key, low, high in (("in_base", 0, 31), ("out_base", 0, 31), ("set_base", 0, 31), ("side_base", 0, 31), ("jmp_pin", 0, 31), ("in_count", 0, 32), ("out_count", 0, 32),
+                               ("set_count", 0, 5), ("side_bits", 0, 5), ("status_n", 0, 23)):
+            v = getattr(c, key)
+            if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+                raise ValueError("%s must be a whole number from %d to %d, not %r" % (key, low, high, v))
         if not 0 <= c.out_en_sel <= 31:
             raise ValueError("out_en_sel must be 0..31")
         if c.fifo_join in ("rx_put", "rx_get", "rx_put_get") and self.block.version < 1:
@@ -895,6 +900,8 @@ class PioBlock:
             raise ValueError("version is 0 (RP2040) or 1 (RP2350, RP2354)")
         if gpio_base not in (0, 16) or (gpio_base and version == 0):
             raise ValueError("gpio_base is 0, or 16 on PIO version 1 (the 48-GPIO parts)")
+        if isinstance(sync_cycles, bool) or not isinstance(sync_cycles, int) or not 0 <= sync_cycles <= 64:
+            raise ValueError("sync_cycles is a whole number from 0 to 64, not %r" % (sync_cycles,))
         self.version, self.gpio_base = version, gpio_base
         self.sync_cycles = sync_cycles                    # 2 = the input synchroniser of the hardware (RP2040 3.5.6.3 p.342); 0 = bypass
         self.loopback = loopback
@@ -950,7 +957,7 @@ class PioBlock:
         Raises
         ------
         ValueError
-            If the program has no instruction or more than 32.
+            If the program has no instruction or more than 32, a word is not a 16-bit integer, or `offset` is negative or not an integer.
         EmulationError
             If there is no room for the program.
 
@@ -983,6 +990,11 @@ class PioBlock:
         n = len(words)
         if n == 0 or n > 32:
             raise ValueError("a program has 1 to 32 instructions")
+        for w in words:
+            if isinstance(w, bool) or not isinstance(w, int) or not 0 <= w <= 0x1FFFF:       # 16 bits, and the builder's flag in bit 16
+                raise ValueError("an instruction is a 16-bit word (0 to 0xFFFF), not %r" % (w,))
+        if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset):
+            raise ValueError("the load offset is a whole number from 0, not %r" % (offset,))
         if offset is None:
             offset = origin
         if offset is None:
@@ -1018,10 +1030,17 @@ class PioBlock:
         Parameters
         ----------
         pin : int
-            The pin number in the window.
+            The pin number in the window (0 to 31).
         level : bool or int
             The level.
+
+        Raises
+        ------
+        ValueError
+            If `pin` is not 0 to 31.
         """
+        if isinstance(pin, bool) or not isinstance(pin, int) or not 0 <= pin <= 31:
+            raise ValueError("the pin is a number from 0 to 31 of the window, not %r" % (pin,))
         self.ext = (self.ext & ~(1 << pin)) | (int(bool(level)) << pin)
 
     def set_inputs(self, value):

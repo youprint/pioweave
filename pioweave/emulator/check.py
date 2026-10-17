@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
-"""A second opinion on a bitweave PIO simulation case: ``python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON``.
+"""A second opinion on a bitweave PIO simulation case: ``python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON``.
 
 `PROGRAM_JSON` is the file ``pioasm -o json`` writes. `CASE_JSON` is one simulation case of bitweave (a ``[[pio.NAME.sim]]`` table of bitweave.toml as a JSON object, the keys of
 ``PioSim`` in bitweave: ``cycles``, ``start_pc``, ``x``, ``y``, ``set_base``, ``fifo_join``, ``tx``, ``tx_feed``, ``pins_in``, ``expect`` and so on). The case runs in the emulator with
@@ -25,14 +25,20 @@ cycle unless ``rx_drain`` is false) and ONE JSON object is printed on standard o
 ``mismatches``
     The first expectations that did not hold.
 
-The exit status is 0 whenever a result was produced, even if the program errored (that is data), and 2 on a usage error (message on standard error).
+The exit status is 0 whenever a result was produced, even if the program errored (that is data, and so is a field of the case with the wrong shape: ``error`` says which), and 2
+on a usage error (message on standard error): an input that is not JSON, is nested too deeply or is over ``--max-bytes`` (default 16 MiB), a case without an integer ``cycles`` or
+with more cycles than ``--max-cycles`` (default 1,000,000). A run takes time and memory in proportion to the cycles.
 """
 import json
 import sys
 
+from .._validate import DEFAULT_MAX_CYCLES
 from .core import EmulationError, PioBlock
 
-__all__ = ["check_case", "main", "SIMULATION_KEYS", "EXPECTATION_KEYS"]
+__all__ = ["check_case", "main", "SIMULATION_KEYS", "EXPECTATION_KEYS", "DEFAULT_MAX_CYCLES", "DEFAULT_MAX_BYTES"]
+
+DEFAULT_MAX_BYTES = 16 * 1024 * 1024
+"""The largest input file `main` reads (16 MiB); ``--max-bytes N`` raises it."""
 
 #: The keys of a case that change what is simulated (all of them have a counterpart in the emulator).
 SIMULATION_KEYS = frozenset((
@@ -65,9 +71,11 @@ def _program(programs, name):
     if not isinstance(items, list) or not items:
         raise ValueError("the pioasm JSON has no program")
     if name is None:
+        if not isinstance(items[0], dict):
+            raise ValueError("the pioasm JSON has no program")
         return items[0]
     for item in items:
-        if item.get("name") == name:
+        if isinstance(item, dict) and item.get("name") == name:
             return item
     raise ValueError("program %r is not in the pioasm JSON" % (name,))
 
@@ -120,7 +128,7 @@ def _expectations(case, pads, dirs, rx, rx_left, rx_regs, tx_left, final):
     return found
 
 
-def check_case(programs, case):
+def check_case(programs, case, max_cycles=DEFAULT_MAX_CYCLES):
     """Run one bitweave simulation case in the emulator and describe the result.
 
     Parameters
@@ -129,6 +137,8 @@ def check_case(programs, case):
         The JSON object ``pioasm -o json`` writes (a ``programs`` list with ``name``, ``pioVersion``, ``wrapTarget``, ``wrap``, ``origin``, ``sideset`` and ``instructions``).
     case : dict
         A simulation case with the keys of bitweave's ``PioSim``; keys with the value null are treated as absent.
+    max_cycles : int
+        The ceiling of the case's ``cycles`` (default 1,000,000): a run takes time and memory in proportion to it.
 
     Returns
     -------
@@ -139,7 +149,7 @@ def check_case(programs, case):
     Raises
     ------
     ValueError
-        If the programs object has no program, or the case names a program that is not in it, or has no ``cycles``.
+        If the programs object has no program, or the case names a program that is not in it, or has no ``cycles``, or ``cycles`` is not an integer from 0 to `max_cycles`.
 
     Examples
     --------
@@ -159,8 +169,13 @@ def check_case(programs, case):
     case = {k: v for k, v in case.items() if v is not None}
     unsupported = sorted(k for k in case if k not in SIMULATION_KEYS and k not in EXPECTATION_KEYS)
     prog = _program(programs, case.get("program"))
-    cycles = int(case["cycles"])
-    version = int(prog.get("pioVersion", 0))
+    try:
+        cycles = int(case["cycles"])
+        version = int(prog.get("pioVersion", 0))
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("`cycles` must be an integer and pioVersion a number") from None
+    if not 0 <= cycles <= max_cycles:
+        raise ValueError("`cycles` is %d: it must be from 0 to %d (--max-cycles N raises the ceiling)" % (cycles, max_cycles))
     res = {"ok": False, "error": None, "error_cycle": None, "cycles": cycles, "pads": {}, "dirs": {}, "rx": [], "rx_left": [], "tx_left": 0,
            "final": {"x": 0, "y": 0, "pc": 0, "isr": 0, "osr": 0, "irq_flags": 0}, "unsupported": unsupported, "mismatches": []}
     pads, dirs, rx_log, rx_left, rx_regs, tx_left, final = [], [], [], [], [0, 0, 0, 0], 0, res["final"]
@@ -217,8 +232,8 @@ def check_case(programs, case):
         irq_clear = [(int(e["cycle"]), int(e["flag"])) for e in case.get("irq_clear") or []]
         irq_set = [(int(e["cycle"]), int(e["flag"])) for e in case.get("irq_set") or []]
         drain = bool(case.get("rx_drain", True))
-    except (ValueError, TypeError, KeyError) as e:
-        res["error"] = str(e)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError) as e:
+        res["error"] = "invalid case: %s" % (e,) if not isinstance(e, ValueError) else str(e)
         return res
     run_error = None
     for t in range(cycles):
@@ -242,7 +257,8 @@ def check_case(programs, case):
     final.update(x=sm.x, y=sm.y, pc=(sm.pc - loaded.offset) & _MASK32, isr=sm.isr, osr=sm.osr, irq_flags=block.irq)
     pins = set()
     for key in ("expect", "expect_dirs"):
-        for k in (case.get(key) or {}):
+        expected = case.get(key)
+        for k in (expected if isinstance(expected, dict) else ()):
             try:
                 pins.add(_pin_of(k))
             except ValueError:
@@ -257,16 +273,53 @@ def check_case(programs, case):
         return res
     try:
         res["mismatches"] = _expectations(case, pads, dirs, rx_log, rx_left, rx_regs, tx_left, final)[:8]
-    except ValueError as e:
-        res["error"] = str(e)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError) as e:
+        res["error"] = "invalid case: %s" % (e,) if not isinstance(e, ValueError) else str(e)
         return res
     res["ok"] = not res["mismatches"]
     return res
 
 
+def _read_json(path, max_bytes):
+    """Read a JSON file of at most `max_bytes`; raises ValueError (or OSError) with a message."""
+    with open(path, "rb") as fh:
+        data = fh.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("%d bytes or more: over the limit of %d (--max-bytes N raises it)" % (len(data), max_bytes))
+    try:
+        return json.loads(data.decode("utf-8"))
+    except RecursionError:
+        raise ValueError("the JSON is nested too deeply") from None
+
+
+def _split_options(args):
+    """The positional arguments and the numbers of ``--max-cycles`` and ``--max-bytes`` (``--max-cycles N`` or ``--max-cycles=N``); ValueError on a bad option."""
+    limits, positional, k = {"--max-cycles": DEFAULT_MAX_CYCLES, "--max-bytes": DEFAULT_MAX_BYTES}, [], 0
+    while k < len(args):
+        a = args[k]
+        key, eq, val = a.partition("=")
+        if key in limits:
+            if not eq:
+                k += 1
+                val = args[k] if k < len(args) else ""
+            try:
+                limits[key] = int(val)
+            except ValueError:
+                raise ValueError("%s expects a whole number, not %r" % (key, val)) from None
+            if limits[key] < 1:
+                raise ValueError("%s must be at least 1" % key)
+        elif a.startswith("--"):
+            raise ValueError("unknown option %s" % a)
+        else:
+            positional.append(a)
+        k += 1
+    return positional, limits["--max-cycles"], limits["--max-bytes"]
+
+
 def main(argv=None):
-    """The command line: ``python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON``. Prints one JSON object (see the module documentation) and returns 0, or returns 2 on a usage
-    error (wrong number of arguments, a file that cannot be read or is not JSON, a case without ``cycles``, a program name that is not in the file).
+    """The command line: ``python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON``. Prints one JSON object (see the module documentation) and
+    returns 0, or returns 2 on a usage error (wrong number of arguments, a file that cannot be read, is not JSON, is nested too deeply or is larger than ``--max-bytes``
+    (default 16 MiB), a case without an integer ``cycles`` or with more than ``--max-cycles`` (default 1,000,000), a program name that is not in the file).
 
     Parameters
     ----------
@@ -294,7 +347,7 @@ def main(argv=None):
     0
     >>> with contextlib.redirect_stderr(sys.stdout):
     ...     main(["only-one-argument"])
-    pioweave.emulator.check: usage: python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON
+    pioweave.emulator.check: usage: python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON
     2
     """
     args = sys.argv[1:] if argv is None else list(argv)
@@ -303,24 +356,27 @@ def main(argv=None):
         print("pioweave.emulator.check: " + message, file=sys.stderr)
         return 2
 
+    try:
+        args, max_cycles, max_bytes = _split_options(args)
+    except ValueError as e:
+        return usage(str(e))
     if len(args) != 2:
         return usage(_USAGE)
     loaded = []
     for path in args:
         try:
-            with open(path) as fh:
-                loaded.append(json.load(fh))
+            loaded.append(_read_json(path, max_bytes))
         except (OSError, ValueError) as e:
             return usage("cannot read %s: %s" % (path, e))
     try:
-        result = check_case(loaded[0], loaded[1])
-    except ValueError as e:
+        result = check_case(loaded[0], loaded[1], max_cycles)
+    except (ValueError, TypeError, AttributeError, OverflowError, RecursionError) as e:
         return usage(str(e))
     print(json.dumps(result))
     return 0
 
 
-_USAGE = "usage: python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON"
+_USAGE = "usage: python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON"
 
 if __name__ == "__main__":
     sys.exit(main())

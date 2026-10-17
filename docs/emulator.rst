@@ -191,7 +191,7 @@ From the command line
 
 ::
 
-   python -m pioweave emulate uart_tx [--chip CHIP] [--cycles N] [--stim GPIO=0101...] [--tx W,W] [--tx-feed CYCLE=WORD] [--no-drain] [--vcd FILE]
+   python -m pioweave emulate uart_tx [--chip CHIP] [--cycles N] [--max-cycles N] [--stim GPIO=0101...] [--tx W,W] [--tx-feed CYCLE=WORD] [--no-drain] [--vcd FILE]
 
 compiles an example design (or ``module:Class``), runs it in the emulator and prints the program, the output pin waveforms, the words received and, with ``--vcd``, writes a waveform file.
 
@@ -200,7 +200,7 @@ Checking a bitweave case
 
 bitweave can ask the emulator for a second opinion on a simulation case. In a ``[pio.NAME]`` section of ``bitweave.toml``, ``cross_check = "pioweave"`` makes bitweave run, for every ``[[pio.NAME.sim]]`` case after its own simulator, ::
 
-   python -m pioweave.emulator.check PROGRAM_JSON CASE_JSON
+   python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON
 
 ``PROGRAM_JSON`` is the file ``pioasm -o json`` writes (programs with ``name``, ``pioVersion``, ``wrapTarget``, ``wrap``, ``origin``, ``sideset``, ``instructions`` and ``usedGPIORanges``) and ``CASE_JSON`` is the case as a JSON object with the keys of bitweave's case (``cycles``, ``start_pc``, ``x``, ``y``, the pin mapping, shift and FIFO settings, ``tx``, ``tx_feed``, ``rx_drain``, ``rx_regs``, ``dirs``, ``pins_in``, ``irq_set``, ``irq_clear``, ``sync_cycles``, ``gpio_base``, ``sm`` and the ``expect*`` keys). The case runs with the semantics bitweave documents: state machine ``sm`` of one block, the 32-pin window, no input synchroniser unless ``sync_cycles`` says so, the host draining the RX FIFO after every cycle unless ``rx_drain`` is false, ``set_count`` 0 when the case does not give it (the SDK's default configuration; the register reset value of 5 applies only to a state machine whose PINCTRL was never written), and the ``loopback="direct"`` convention. One JSON object is printed on standard output:
 
@@ -226,7 +226,7 @@ bitweave can ask the emulator for a second opinion on a simulation case. In a ``
    * - ``mismatches``
      - the first expectations that did not hold
 
-The exit status is 0 whenever a result was produced, even when the program errored (an error is data), and 2 on a usage error. The same function is ``pioweave.emulator.check.check_case(programs, case)``. bitweave compares ok / error, the per-cycle pad and direction waveforms, the words with their cycles, the FIFO counts and the final registers, and reports the first differences in its stage ``xcheck:CASE``. Two models written from the same datasheets that agree are still models: nothing has run on a chip.
+The exit status is 0 whenever a result was produced, even when the program errored (an error is data; so is an optional field of the case with the wrong shape, which gives ``ok`` false and an ``error``), and 2 on a usage error with a message on standard error: an unreadable file, input that is not JSON, nested too deeply or longer than ``--max-bytes`` (default 16 MiB), a case without an integer ``cycles`` or with more than ``--max-cycles`` (default 1,000,000; the run takes time and memory in proportion to the cycles), a program name that is not in the file. Bad input never gives status 1. The same function is ``pioweave.emulator.check.check_case(programs, case)``. bitweave compares ok / error, the per-cycle pad and direction waveforms, the words with their cycles, the FIFO counts and the final registers, and reports the first differences in its stage ``xcheck:CASE``. Two models written from the same datasheets that agree are still models: nothing has run on a chip.
 
 How it was checked
 ------------------
