@@ -11,8 +11,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
-from amaranth_rp.compile import PioCompileError, compile_design  # noqa: E402
-from amaranth_rp.platform import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
+from pioweave.compile import PioCompileError, compile_design  # noqa: E402
+from pioweave.platform import RP2040PioPlatform, RP2350PioPlatform  # noqa: E402
 
 
 class Dyn(Elaboratable):
@@ -611,19 +611,19 @@ def test_the_fifo_model_is_the_only_submodule_allowed():
     refuse(body, "submodules are not supported")
 
 
-# ----------------------------------------------------------------------------- the version gate and the FSM state names (python/rp/src/amaranth_rp/_compat.py)
+# ----------------------------------------------------------------------------- the version gate and the FSM state names (python/pioweave/src/pioweave/_compat.py)
 def test_version_gate():
-    from amaranth_rp._compat import UnsupportedAmaranth, check_version
+    from pioweave._compat import UnsupportedAmaranth, check_version
     for ok in ("0.5.0", "0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):
         assert check_version(ok, allow=False)
     for bad in ("0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
         with pytest.raises(UnsupportedAmaranth, match="tested with Amaranth"):
             check_version(bad, allow=False)
-        assert check_version(bad, allow=True) is False     # AMARANTH_RP_ALLOW_UNTESTED=1 lets it through (reported as untested)
+        assert check_version(bad, allow=True) is False     # PIOWEAVE_ALLOW_UNTESTED=1 lets it through (reported as untested)
 
 
 def test_fsm_state_names_for_both_ways_amaranth_stores_them():
-    from amaranth_rp._compat import fsm_state_names
+    from pioweave._compat import fsm_state_names
 
     class Decoder:             # Amaranth 0.5.x: Signal.decoder is a function that fails for numbers that are not states
         decoder = staticmethod(lambda n: {0: "A/0", 1: "B/1"}[n])

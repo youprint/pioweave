@@ -15,8 +15,8 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-from amaranth_rp_builder import examples as pio_examples
-from amaranth_rp_builder.program import (ALWAYS, CLEAR, EXEC, INVERT, ISR, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PC, PIN, PINDIRS, PINS, REVERSE, SET, STATUS, WAIT, X, X_DEC,  # noqa: E402
+from pioweave_builder import examples as pio_examples
+from pioweave_builder.program import (ALWAYS, CLEAR, EXEC, INVERT, ISR, NOT_OSRE, NOT_X, NOT_Y, NULL, OSR, PC, PIN, PINDIRS, PINS, REVERSE, SET, STATUS, WAIT, X, X_DEC,  # noqa: E402
                      X_NE_Y, Y, Y_DEC, NONE, PioError, Program, write_pio)
 
 
@@ -307,16 +307,16 @@ def test_write_pio_holds_several_programs(tmp_path):
 
 
 def test_emit_script_prints_the_generator_line(tmp_path):
-    r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit", "square", str(tmp_path)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-I", "-m", "pioweave_builder", "emit", "square", str(tmp_path)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     line = [l for l in r.stdout.splitlines() if l.startswith("EMIT ")][-1]
     path = json.loads(line[5:])["path"]
     with open(path) as fh:
         assert fh.read() == pio_examples.square().pio_text()
     for bad in (["nope", str(tmp_path)], []):
-        r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit"] + bad, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-I", "-m", "pioweave_builder", "emit"] + bad, capture_output=True, text=True)
         assert r.returncode != 0
-    r = subprocess.run([sys.executable, "-I", "-m", "amaranth_rp_builder", "emit", "uart_tx", str(tmp_path), "rp2040"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-I", "-m", "pioweave_builder", "emit", "uart_tx", str(tmp_path), "rp2040"], capture_output=True, text=True)
     assert r.returncode == 0 and "uart_tx.pio" in r.stdout
 
 

@@ -33,7 +33,7 @@ def find_pioasm():
     return None
 
 
-from amaranth_rp.project import amaranth_run, amaranth_waves  # noqa: E402,F401  (the reference simulation lives next to the project writers)
+from pioweave.project import amaranth_run, amaranth_waves  # noqa: E402,F401  (the reference simulation lives next to the project writers)
 
 
 def _toml_value(v):
@@ -226,7 +226,7 @@ def random_spec(seed):
 
 
 def random_factory(spec):
-    from amaranth_rp.platform import PLATFORMS
+    from pioweave.platform import PLATFORMS
 
     def factory():
         pl = PLATFORMS[spec["chip"]]()
@@ -347,7 +347,7 @@ def random_data_spec(seed):
 
 
 def random_data_factory(spec):
-    from amaranth_rp.platform import PLATFORMS
+    from pioweave.platform import PLATFORMS
 
     def factory():
         pl = PLATFORMS[spec["chip"]]()

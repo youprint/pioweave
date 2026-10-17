@@ -3,7 +3,7 @@ requires = ["pdm-backend>=2.4"]
 build-backend = "pdm.backend"
 
 [project]
-name = "amaranth-rp"
+name = "pioweave"
 version = "0.1.0"
 description = "Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354: compile an Amaranth FSM to PIO and write the project"
 readme = "README.md"
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     "Typing :: Typed",
 ]
-dependencies = ["amaranth>=0.5,<0.6", "amaranth-rp-builder==0.1.0"]
+dependencies = ["amaranth>=0.5,<0.6", "pioweave-builder==0.1.0"]
 
 [project.urls]
 "Source Code" = "https://github.com/youprint/bitweave/tree/main/python"
@@ -29,7 +29,7 @@ distribution = true
 
 [tool.pdm.build]
 package-dir = "src"
-includes = ["src/amaranth_rp"]
+includes = ["src/pioweave"]
 source-includes = ["tests", "LICENSE", "README.md"]
 
 [tool.pytest.ini_options]

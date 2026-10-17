@@ -1,8 +1,8 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Command line of amaranth-rp, and the generator command for bitweave's PIO flow.
+"""Command line of pioweave, and the generator command for bitweave's PIO flow.
 
-    python -m amaranth_rp list
-    python -m amaranth_rp build DESIGN OUTDIR [--chip CHIP] [--project pio|pico-c|micropython] [--clock-hz N] [--cycles N] [--stim GPIO=WAVE ...] [--name NAME]
+    python -m pioweave list
+    python -m pioweave build DESIGN OUTDIR [--chip CHIP] [--project pio|pico-c|micropython] [--clock-hz N] [--cycles N] [--stim GPIO=WAVE ...] [--name NAME]
 
 DESIGN is an example name (see `list`) or `module:Class` of an Amaranth Elaboratable. The project is written to OUTDIR/project and `EMIT {"path": ".../NAME.pio"}`
 is printed, which is what a bitweave `generator = [...]` expects.
@@ -48,7 +48,7 @@ def _resolve(a):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="python -m amaranth_rp", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="python -m pioweave", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="list the example designs")
     b = sub.add_parser("build", help="compile a design and write a project")

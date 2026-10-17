@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see LICENSE)
-from amaranth_rp import RP2350APioPlatform
+from pioweave import RP2350APioPlatform
 
 from .resources import sdk_resources
 

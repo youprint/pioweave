@@ -3,9 +3,9 @@ requires = ["pdm-backend>=2.4"]
 build-backend = "pdm.backend"
 
 [project]
-name = "amaranth-rp-boards"
+name = "pioweave-boards"
 version = "0.1.0"
-description = "Board definitions (named LED, UART, I2C and SPI pins) for amaranth-rp: Raspberry Pi Pico, Pico 2 and others"
+description = "Board definitions (named LED, UART, I2C and SPI pins) for pioweave: Raspberry Pi Pico, Pico 2 and others"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "LicenseRef-Proprietary"
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     "Typing :: Typed",
 ]
-dependencies = ["amaranth-rp==0.1.0"]
+dependencies = ["pioweave==0.1.0"]
 
 [project.urls]
 "Source Code" = "https://github.com/youprint/bitweave/tree/main/python"
@@ -29,7 +29,7 @@ distribution = true
 
 [tool.pdm.build]
 package-dir = "src"
-includes = ["src/amaranth_rp_boards"]
+includes = ["src/pioweave_boards"]
 source-includes = ["tests", "LICENSE", "README.md"]
 
 [tool.pytest.ini_options]

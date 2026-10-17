@@ -14,10 +14,10 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 import cosim  # noqa: E402
-from amaranth_rp import designs as pio_designs  # noqa: E402
-from amaranth_rp.project import PioProjectError, find_pioasm  # noqa: E402
-from amaranth_rp.platform import PLATFORMS
-from amaranth_rp.project import SimOptions  # noqa: E402
+from pioweave import designs as pio_designs  # noqa: E402
+from pioweave.project import PioProjectError, find_pioasm  # noqa: E402
+from pioweave.platform import PLATFORMS
+from pioweave.project import SimOptions  # noqa: E402
 
 BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
@@ -106,7 +106,7 @@ def test_micropython_project_files(tmp_path):
 def test_micropython_needs_pioasm(tmp_path, monkeypatch):
     monkeypatch.setenv("PIOASM", str(tmp_path / "missing"))
     monkeypatch.setenv("PATH", "/nonexistent")
-    from amaranth_rp import project as pio_project
+    from pioweave import project as pio_project
     monkeypatch.setattr(pio_project.os.path, "exists", lambda p: False)
     with pytest.raises(PioProjectError, match="needs pioasm"):
         build(tmp_path, "square_wave", "micropython")
@@ -192,8 +192,8 @@ def test_the_old_build_keywords_still_work_and_warn(tmp_path):
 def test_designs_are_wiring_components_and_the_fifo_model_has_a_signature():
     from amaranth.lib import wiring
 
-    from amaranth_rp import PioDesign
-    from amaranth_rp.data import FifoModel
+    from pioweave import PioDesign
+    from pioweave.data import FifoModel
     for name, entry in pio_designs.PROGRAMS.items():
         d = entry[0]()
         assert isinstance(d, PioDesign) and isinstance(d, wiring.Component) and not list(d.signature.members), name

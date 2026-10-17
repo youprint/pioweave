@@ -1,5 +1,8 @@
 # Study: a Python / Amaranth package for the PIO tooling
 
+Rename (owner, 2026-10-17, after this study): the packages amaranth-rp, amaranth-rp-builder and amaranth-rp-boards are now called pioweave, pioweave-builder and pioweave-boards (imports pioweave, pioweave_builder,
+pioweave_boards; the install component is `pioweave`; the environment variable is PIOWEAVE_ALLOW_UNTESTED). The names were free on PyPI on 2026-10-17. The rest of this note keeps the old names.
+
 Question (owner, 2026-10-17): can the PIO tooling become a proper Python Amaranth module, and how would it be structured? This note records how Amaranth packages are
 built, three things "module" can mean, five proposals, and a recommendation. Decision (owner, 2026-10-17): P2 (two packages) with P4 (local install), named amaranth-rp-builder and amaranth-rp, no boards package now, `bitweave install rp-pio`
 allowed. The MCP server and the Rust flows keep the name Bitweave. Implemented 2026-10-17; the rest of this note is the study that led to it.

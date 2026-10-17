@@ -131,7 +131,7 @@ class _RPPioPlatform(Platform):
         return self._scratch[name]
 
     def shifter(self, m, out_shift="right", in_shift="right"):
-        """The OSR / ISR shifters and the two FIFOs of the state machine (amaranth_rp.data.Shifter); call it once, inside elaborate()."""
+        """The OSR / ISR shifters and the two FIFOs of the state machine (pioweave.data.Shifter); call it once, inside elaborate()."""
         from .data import Shifter
         return Shifter(self, m, out_shift, in_shift, self.tx_init)
 

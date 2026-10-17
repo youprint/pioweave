@@ -28,7 +28,7 @@ import re
 from amaranth.hdl import Const, Signal
 from amaranth.lib import io
 
-from amaranth_rp_builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, NULL, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
+from pioweave_builder import (ALWAYS, INVERT, NONE, NOT_X, NOT_Y, NULL, PINS, PIN, X, X_DEC, X_NE_Y, Y, Y_DEC, PioError, Program)
 
 from . import data as D
 from ._compat import Fragment, ast, fsm_state_names

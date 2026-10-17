@@ -8,7 +8,7 @@ What the compiler needs from Amaranth, and where it comes from:
 
 Versions (python/scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
 no pre-release and the newest tag is v0.6.0.dev0); the quick suite (refusals, builder, boards, the instruction words of every example) passes on every 0.5.x from 0.5.0 to 0.5.10. Those
-are accepted; any other version is refused with a clear message unless AMARANTH_RP_ALLOW_UNTESTED=1 is set.
+are accepted; any other version is refused with a clear message unless PIOWEAVE_ALLOW_UNTESTED=1 is set.
 """
 import os
 
@@ -24,15 +24,15 @@ class UnsupportedAmaranth(ImportError):
 
 def check_version(version=None, allow=None):
     v = version if version is not None else amaranth.__version__
-    allow = os.environ.get("AMARANTH_RP_ALLOW_UNTESTED") == "1" if allow is None else allow
+    allow = os.environ.get("PIOWEAVE_ALLOW_UNTESTED") == "1" if allow is None else allow
     parts = v.split(".")
     try:
         ok = v in TESTED_DEV or (parts[0] == "0" and parts[1] == "5" and len(parts) == 3 and parts[2].isdigit() and int(parts[2]) <= 10)
     except (IndexError, ValueError):
         ok = False
     if not ok and not allow:
-        raise UnsupportedAmaranth("amaranth-rp was tested with Amaranth %s and %s; found %s. Its compiler reads Amaranth's internals. "
-                                  "Set AMARANTH_RP_ALLOW_UNTESTED=1 to try anyway." % (TESTED, ", ".join(TESTED_DEV), v))
+        raise UnsupportedAmaranth("pioweave was tested with Amaranth %s and %s; found %s. Its compiler reads Amaranth's internals. "
+                                  "Set PIOWEAVE_ALLOW_UNTESTED=1 to try anyway." % (TESTED, ", ".join(TESTED_DEV), v))
     return ok
 
 

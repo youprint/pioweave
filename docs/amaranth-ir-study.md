@@ -1,6 +1,6 @@
-# Study: how much of Amaranth's internals amaranth-rp depends on (2026-10-17)
+# Study: how much of Amaranth's internals pioweave depends on (2026-10-17)
 
-Question (owner): what has to change so amaranth-rp follows Amaranth's public interfaces. This note records what was checked, not a change.
+Question (owner): what has to change so pioweave follows Amaranth's public interfaces. This note records what was checked, not a change.
 
 ## What the compiler uses
 
@@ -19,9 +19,9 @@ Question (owner): what has to change so amaranth-rp follows Amaranth's public in
 
 ## Experiment
 
-In a scratch virtual environment with Amaranth main (0.6.0.dev140) and `AMARANTH_RP_ALLOW_UNTESTED=1`:
+In a scratch virtual environment with Amaranth main (0.6.0.dev140) and `PIOWEAVE_ALLOW_UNTESTED=1`:
 
-- unchanged amaranth-rp fails on every design at its first check (the state-name lookup);
+- unchanged pioweave fails on every design at its first check (the state-name lookup);
 - with a ten-line shim that restores `Signal.decoder` from `_format._variants`, all ten example designs (six without and four with the data path) compile to exactly the same instruction words as on 0.5.10, and the Amaranth reference simulation of the four data-path designs runs and gives the same number of received words (2, 2, 7).
 
 Afterwards (same day): the adapter layer of option A was implemented, and the whole test suite passes on 0.5.1, 0.5.10 and 0.6.0.dev140 (see python/README.md). Not run: later 0.6 development versions.

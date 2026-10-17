@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""amaranth-rp: Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 (and their A / B variants).
+"""pioweave: Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 (and their A / B variants).
 
 A design is an Amaranth Elaboratable written in a restricted style (one FSM, one state = one PIO instruction); `platform.build(design, name, dir,
 project="pio" | "pico-c" | "micropython")` compiles it to PIO instructions and writes the project. Design note: docs/amaranth-pio.md. Nothing has run on a chip.

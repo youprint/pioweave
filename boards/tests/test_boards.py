@@ -1,4 +1,4 @@
-"""Tests of amaranth_rp_boards: the pins against the Pico SDK board headers (when an SDK checkout is found), the resources, and a build that uses a named pin."""
+"""Tests of pioweave_boards: the pins against the Pico SDK board headers (when an SDK checkout is found), the resources, and a build that uses a named pin."""
 import json
 import os
 import re
@@ -6,11 +6,11 @@ import re
 import pytest
 from amaranth.hdl import Elaboratable, Module
 
-from amaranth_rp import compile_design
-from amaranth_rp_boards.pico import PicoPlatform
-from amaranth_rp_boards.pico2 import Pico2Platform
-from amaranth_rp_boards.waveshare_core2350b import WaveshareCore2350BPlatform
-from amaranth_rp_boards.weact_studio_rp2350b_core import WeActStudioRP2350BCorePlatform
+from pioweave import compile_design
+from pioweave_boards.pico import PicoPlatform
+from pioweave_boards.pico2 import Pico2Platform
+from pioweave_boards.waveshare_core2350b import WaveshareCore2350BPlatform
+from pioweave_boards.weact_studio_rp2350b_core import WeActStudioRP2350BCorePlatform
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))

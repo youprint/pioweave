@@ -1,8 +1,8 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Command line of amaranth-rp-builder, and the generator command for bitweave's PIO flow.
+"""Command line of pioweave-builder, and the generator command for bitweave's PIO flow.
 
-    python -m amaranth_rp_builder list
-    python -m amaranth_rp_builder emit PROGRAM OUTDIR [CHIP]     writes OUTDIR/PROGRAM.pio and prints `EMIT {"path": ...}` (bitweave generator protocol)
+    python -m pioweave_builder list
+    python -m pioweave_builder emit PROGRAM OUTDIR [CHIP]     writes OUTDIR/PROGRAM.pio and prints `EMIT {"path": ...}` (bitweave generator protocol)
 """
 import argparse
 import json
@@ -13,7 +13,7 @@ from . import examples
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="python -m amaranth_rp_builder", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="python -m pioweave_builder", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="list the example programs")
     e = sub.add_parser("emit", help="write an example program as a .pio file and print EMIT {json}")

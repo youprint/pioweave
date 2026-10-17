@@ -16,9 +16,9 @@ from amaranth.build import Pins, Resource  # noqa: E402
 from amaranth.hdl import Elaboratable, Module, Signal  # noqa: E402
 
 import cosim  # noqa: E402
-from amaranth_rp import designs as pio_designs  # noqa: E402
-from amaranth_rp.compile import PioCompileError, compile_design  # noqa: E402
-from amaranth_rp.platform import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform, RP2354PioPlatform  # noqa: E402
+from pioweave import designs as pio_designs  # noqa: E402
+from pioweave.compile import PioCompileError, compile_design  # noqa: E402
+from pioweave.platform import PLATFORMS, RP2040PioPlatform, RP2350PioPlatform, RP2354PioPlatform  # noqa: E402
 
 BW, PIOASM = cosim.find_bitweave(), cosim.find_pioasm()
 needs_tools = pytest.mark.skipif(BW is None or PIOASM is None, reason="bitweave or pioasm not found (set BITWEAVE and PIOASM)")
@@ -118,7 +118,7 @@ def test_gpio_window_selection_per_variant():
 
 
 def test_variants_are_the_same_pio_with_different_pinouts():
-    from amaranth_rp.platform import RP2350APioPlatform, RP2350BPioPlatform, RP2354APioPlatform, RP2354BPioPlatform
+    from pioweave.platform import RP2350APioPlatform, RP2350BPioPlatform, RP2354APioPlatform, RP2354BPioPlatform
     for cls, chip, count, bases in ((RP2350APioPlatform, "rp2350a", 30, (0,)), (RP2350BPioPlatform, "rp2350b", 48, (0, 16)),
                                     (RP2354APioPlatform, "rp2354a", 30, (0,)), (RP2354BPioPlatform, "rp2354b", 48, (0, 16))):
         pl = cls()
@@ -425,7 +425,7 @@ def test_random_data_path_designs_match_the_pio_simulator(seed):
 
 # ----------------------------------------------------------------------------- the same programs on every Amaranth version
 def test_example_programs_are_the_same_on_every_amaranth_version():
-    """python/rp/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
+    """python/pioweave/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
     The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently."""
     import json
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "example_programs.json")) as fh:

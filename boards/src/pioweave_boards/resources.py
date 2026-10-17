@@ -1,5 +1,5 @@
 # Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see LICENSE)
-"""Helpers that turn the default pins of a Pico SDK board header into named amaranth-rp resources (one resource per pin: amaranth-rp requests plain pin groups)."""
+"""Helpers that turn the default pins of a Pico SDK board header into named pioweave resources (one resource per pin: pioweave requests plain pin groups)."""
 from amaranth.build import Pins, Resource
 
 __all__ = ["sdk_resources"]
