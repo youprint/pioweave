@@ -242,20 +242,18 @@ class Compiled:
         Returns
         -------
         dict
-            The configuration, usable as keyword arguments of `pioweave.emulator.run_case` together with ``version=CHIP_VERSION[compiled.chip]``
-            (`pioweave.builder.CHIP_VERSION`: ``run_case`` defaults to PIO version 0, which refuses a ``gpio_base`` of 16 and the RP2350-only keys);
+            The configuration, usable as keyword arguments of `pioweave.emulator.run_case` (``run_case`` takes the PIO version from the compiled program);
             `pioweave.emulator.run_compiled` does that for you.
 
         Examples
         --------
         >>> from pioweave import PLATFORMS, compile_design, designs
-        >>> from pioweave.builder import CHIP_VERSION
         >>> from pioweave.emulator import run_case
         >>> cls, chip, stim, cycles, opts = designs.entry("high_pins")
         >>> c = compile_design(cls(), PLATFORMS[chip](), "high_pins")
         >>> c.sim_config()["gpio_base"]
         16
-        >>> r = run_case(c.program, 4, version=CHIP_VERSION[c.chip], **c.sim_config())
+        >>> r = run_case(c.program, 4, **c.sim_config())
         """
         c = {}
         if self.set_pin:
@@ -1085,7 +1083,7 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
     if cond[0] == "pinbit":
         if (tn == i) == (en == i):
             _fail("a test on one bit of an input group can only be a wait (the state stays until the bit has a level): PIO has no jump on a pin relative to the IN base", br.loc)
-        stay_leaf_next, go_next = (tn, en) if tn == i else (en, tn)
+        go_next = en if tn == i else tn
         if go_next != succ:
             _fail("a state that waits for a pin must continue with the next state", br.loc)
         if treg or ereg:
@@ -1096,7 +1094,7 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
         return Op("wait_pin", level=int(level), idx=cond[3], side=side, targets=[], foldable=True, pure_nop=False)
     # wait: stays until the test is true / false
     if cond[0] == "pin" and (tn == i) != (en == i):
-        stay_leaf_next, go_next = (tn, en) if tn == i else (en, tn)
+        go_next = en if tn == i else tn
         if go_next != succ:
             _fail("a state that waits for a pin must continue with the next state", br.loc)
         if treg or ereg:

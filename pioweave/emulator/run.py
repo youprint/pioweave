@@ -77,7 +77,7 @@ def _stim_at(stim, t):
     return v
 
 
-def run_case(program, cycles, version=0, stim=None, tx=(), tx_feed=(), drain=True, sync_cycles=0, gpio_base=0, record=False, on_error="raise", **config):
+def run_case(program, cycles, version=None, stim=None, tx=(), tx_feed=(), drain=True, sync_cycles=0, gpio_base=0, record=False, on_error="raise", **config):
     """Load `program` (a pioweave.builder.Program, or a word list with side=(bits, opt, pindirs) in `config`) into a fresh block, configure state machine 0 with `config`
     (`set_base`, `set_count`, `out_base`, `out_count`, `sideset_base` (alias of `side_base`), `in_base`, `jmp_pin`, `in_shift`, `out_shift`, `autopush`, `autopull`, `push_thresh`,
     `pull_thresh`, `fifo_join`, `status_sel`, `status_n`, `x`, `y`, `dirs`, `start_pc`) and run it for `cycles` cycles. A program that does something the hardware leaves
@@ -90,7 +90,7 @@ def run_case(program, cycles, version=0, stim=None, tx=(), tx_feed=(), drain=Tru
     cycles : int
         The number of cycles to run.
     version : int
-        The PIO version: 0 or 1.
+        The PIO version: 0 or 1. None (the default) takes it from a `Program` (its chip) and is 0 for a list of words.
     stim : dict or None
         Input waveforms ``{pin: "0101..."}`` in window pin numbers, one character per cycle; the last character repeats.
     tx : iterable of int
@@ -143,6 +143,8 @@ def run_case(program, cycles, version=0, stim=None, tx=(), tx_feed=(), drain=Tru
         if not isinstance(pin, int) or not 0 <= pin <= 31 or not isinstance(w, str) or not w or w.strip("01"):
             raise ValueError("stim is {pin: waveform} with a pin from 0 to 31 and a non-empty string of 0 and 1, not %r: %r" % (pin, w))
     side = config.pop("side", None)
+    if version is None:
+        version = getattr(program, "version", 0)
     block = PioBlock(version=version, gpio_base=gpio_base, sync_cycles=sync_cycles)
     loaded = block.load(program, side=side)
     sm = block.sm[0]

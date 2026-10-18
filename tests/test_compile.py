@@ -741,3 +741,4 @@ class SimConfigTests(support.TestCase):
         cls, chip, stim, cycles, opts = pio_designs.entry(name)
         c = compile_factory(lambda: (cls(), PLATFORMS[chip]()), name)
         run_case(c.program, 5, version=CHIP_VERSION[c.chip], on_error="stop", **c.sim_config())
+        run_case(c.program, 5, on_error="stop", **c.sim_config())      # the version is taken from the program
