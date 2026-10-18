@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Random blocks of two to four state machines (tests/cosim_block.py): the Amaranth simulation of the whole block and the emulator running the compiled programs together
 must agree cycle by cycle on the pins, the IRQ flags, the words received and what is left in the FIFOs; each machine alone in the emulator, in the environment that
 `machine_cases` derives, must repeat what it did in the block; and (with the tools) the same single-machine cases pass in bitweave's simulator. PIO_COSIM_N sets the

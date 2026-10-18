@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Tests of program.py and examples.py.
 
 The main check: the DSL encodes every instruction form itself, from the datasheet tables, and the real pioasm assembles the text the DSL
@@ -282,7 +282,7 @@ class BuilderTests(support.TestCase):
         self.assertEqual((got[0]["wrapTarget"], got[0]["wrap"]), p.wrap_range)
 
     @needs_pioasm
-    def test_origin_makes_jump_targets_absolute(self):
+    def test_origin_leaves_jump_targets_program_relative(self):
         p = Program("org", origin=4)
         p.label("a")
         p.set(X, 1)
@@ -300,17 +300,25 @@ class BuilderTests(support.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual([g["name"] for g in got], ["square", "passthru"])
 
+    def emit(self, *args):
+        """Run ``python -m pioweave.builder emit ...`` in a subprocess that imports the pioweave of THIS source tree (COR-19: with ``-I`` the interpreter ignores PYTHONPATH and
+        imports whatever pioweave is installed, so the test failed on a clean checkout and tested another tree on a machine with an editable install elsewhere)."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ, PYTHONPATH=root)
+        where = subprocess.run([sys.executable, "-c", "import pioweave; print(pioweave.__file__)"], capture_output=True, text=True, env=env, cwd=str(self.tmp_path))
+        self.assertEqual(os.path.dirname(os.path.dirname(os.path.realpath(where.stdout.strip()))), os.path.realpath(root), where.stdout + where.stderr)
+        return subprocess.run([sys.executable, "-m", "pioweave.builder", "emit"] + list(args), capture_output=True, text=True, env=env, cwd=str(self.tmp_path))
+
     def test_emit_script_prints_the_generator_line(self):
-        r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "square", str(self.tmp_path)], capture_output=True, text=True)
+        r = self.emit("square", str(self.tmp_path))
         self.assertEqual(r.returncode, 0, r.stderr)
         line = [l for l in r.stdout.splitlines() if l.startswith("EMIT ")][-1]
         path = json.loads(line[5:])["path"]
         with open(path) as fh:
             self.assertEqual(fh.read(), pio_examples.square().pio_text())
         for bad in (["nope", str(self.tmp_path)], []):
-            r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit"] + bad, capture_output=True, text=True)
-            self.assertNotEqual(r.returncode, 0)
-        r = subprocess.run([sys.executable, "-I", "-m", "pioweave.builder", "emit", "uart_tx", str(self.tmp_path), "rp2040"], capture_output=True, text=True)
+            self.assertNotEqual(self.emit(*bad).returncode, 0)
+        r = self.emit("uart_tx", str(self.tmp_path), "rp2040")
         self.assertTrue(r.returncode == 0 and "uart_tx.pio" in r.stdout)
 
 

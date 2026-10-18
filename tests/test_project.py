@@ -1,5 +1,5 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Tests of pio_project.py: the three project kinds written by platform.build(..., project=KIND).
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+"""Tests of pioweave/project.py: the three project kinds written by platform.build(..., project=KIND).
 
 The generated bitweave.toml is run with the real bitweave and pioasm when they are found (skipped otherwise). The generated Pico SDK C project is
 built through `bitweave firmware` only when PIO_BUILD_FIRMWARE=1 and the Pico SDK and arm-none-eabi-gcc are found (about 35 s). Nothing runs on a chip.
@@ -340,10 +340,7 @@ class BitweaveRunTests(support.TestCase):
 class RP2350FeatureProject(support.TestCase):
     """The configuration calls that exist only for PIO version 1 (STATUS_IRQ_SET, sm_config_set_in_pin_count) in a generated project built with the real SDK."""
 
-    @needs_tools
-    @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
-                        or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
-    def test_irq_status_and_pin_count_build(self):
+    def _build_version1(self):
         from amaranth.build import Pins, Resource
         from amaranth.hdl import Module
 
@@ -378,9 +375,85 @@ class RP2350FeatureProject(support.TestCase):
         out = self.tmp_path / "v1"
         pl.build(design, "v1", str(out), project="pico-c", sim=SimOptions(factory=factory, cycles=30, stim={4: "0110"}))
         main = read(out / "main.c")
+        return out, main
+
+    def test_irq_status_and_pin_count_are_in_the_generated_c(self):
+        # COR-46: this check needs neither the SDK nor a compiler, so it runs in the default run
+        out, main = self._build_version1()
+        self.assertIn("sm_config_set_in_pin_count(&c, 2);", main)
+        self.assertIn("sm_config_set_mov_status(&c, STATUS_IRQ_SET, 3);", main)
+
+    @needs_tools
+    @unittest.skipIf(os.environ.get("PIO_BUILD_FIRMWARE") != "1" or not os.path.exists(os.path.join(SDK, "pico_sdk_init.cmake"))
+                        or not os.path.exists(os.path.join(TOOLCHAIN, "arm-none-eabi-gcc")), reason="set PIO_BUILD_FIRMWARE=1 with the Pico SDK and arm-none-eabi-gcc under ../bitweave/.tools")
+    def test_irq_status_and_pin_count_build(self):
+        out, main = self._build_version1()
         self.assertTrue("STATUS_IRQ_SET, 3" in main and "sm_config_set_in_pin_count(&c, 2)" in main)
         cfg = read(out / "bitweave.toml").replace('[firmware.v1]\n', "").replace('source_dir = "{root}"\nchip = "rp2350"\n', "", 1)
         (out / "bitweave.toml").write_text(cfg)
         extra = '\n[firmware.v1]\nsource_dir = "{root}"\nchip = "rp2350"\nsdk_path = "%s"\ntoolchain_dir = "%s"\n' % (SDK, TOOLCHAIN)
         r, res = run_bitweave(out, "v1", "firmware", extra)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class ChipStartStateTests(support.TestCase):
+    """COR-01 and COR-02: the generated C and MicroPython must make the chip start like the reference simulation.
+
+    The expectations come from the Pico SDK header (pio_sm_restart: "Not affected: ... the contents of its output shift register, and its X and Y scratch registers") and from
+    RP2040 datasheet 3.5.6.3 p.342 (2-flipflop input synchroniser, bypassed by INPUT_SYNC_BYPASS), not from the code under test.
+    """
+
+    def test_c_project_zeroes_x_y_isr_and_osr_before_pio_sm_init(self):
+        main = read(build(self.tmp_path, "uart_tx", "pico-c") / "main.c")
+        zero = ["pio_sm_exec(pio, sm, pio_encode_set(pio_x, 0));", "pio_sm_exec(pio, sm, pio_encode_set(pio_y, 0));",
+                "pio_sm_exec(pio, sm, pio_encode_mov(pio_isr, pio_null));", "pio_sm_exec(pio, sm, pio_encode_mov(pio_osr, pio_null));"]
+        for line in zero:
+            self.assertIn(line, main)
+        # with the default configuration (no side-set that a forced instruction would drive), then restart so that the shift counters are as after a reset (OSR count 32)
+        self.assertLess(main.index("pio_sm_set_config(pio, sm, &zero_config)"), main.index(zero[0]))
+        self.assertLess(main.index(zero[-1]), main.index("pio_sm_restart(pio, sm);"))
+        self.assertLess(main.index("pio_sm_restart(pio, sm);"), main.index("pio_sm_init(pio, sm, offset, &c);"))
+
+    def test_c_project_sets_the_input_sync_bypass_for_designs_that_read_pins(self):
+        main = read(build(self.tmp_path, "uart_rx", "pico-c") / "main.c")
+        self.assertRegex(main, r"pio_set_input_sync_bypass_with_mask\(pio, 0x[0-9a-f]+u, 0x[0-9a-f]+u\);")
+        import re
+        mask = int(re.search(r"with_mask\(pio, (0x[0-9a-f]+)u, (0x[0-9a-f]+)u\)", main).group(1), 16)
+        cls, chip, stim, cycles, opts = pio_designs.entry("uart_rx")
+        self.assertEqual(mask, sum(1 << g for g in stim), "the bypass covers the stimulus pins of the example")
+
+    def test_c_project_without_inputs_has_no_bypass(self):
+        self.assertNotIn("input_sync_bypass", read(build(self.tmp_path, "square_wave", "pico-c") / "main.c"))
+
+    def test_micropython_zeroes_the_registers_then_restarts(self):
+        if find_pioasm() is None:               # the project writer's own search (PIOASM, PATH, next to the interpreter), not the tests' wider one
+            self.skipTest("pioasm not found (set PIOASM)")
+        main = read(build(self.tmp_path, "uart_tx", "micropython") / "main.py")
+        for line in ('sm.exec("set(x, 0)")', 'sm.exec("set(y, 0)")', 'sm.exec("mov(isr, null)")', 'sm.exec("mov(osr, null)")', "sm.restart()"):
+            self.assertIn(line, main)
+        self.assertLess(main.index("sm.restart()"), main.index("sm.active(1)"))
+
+    def test_the_bypass_mask_is_64_bit_for_gpios_from_32_and_includes_jmp_and_direction_pins(self):
+        from types import SimpleNamespace
+
+        from pioweave.project import _c_sync_bypass
+        low = SimpleNamespace(input_gpios=[4], dynamic_gpios=[7], jmp_gpio=9)
+        self.assertIn("pio_set_input_sync_bypass_with_mask(pio, 0x290u, 0x290u);", _c_sync_bypass([low])[1])      # bits 4, 7, 9
+        high = SimpleNamespace(input_gpios=[40], dynamic_gpios=[], jmp_gpio=None)
+        self.assertIn("pio_set_input_sync_bypass_with_mask64(pio, 0x10000000000ull, 0x10000000000ull);", _c_sync_bypass([high])[1])      # bit 40
+        none = SimpleNamespace(input_gpios=[], dynamic_gpios=[], jmp_gpio=None)
+        self.assertEqual(_c_sync_bypass([none]), [])
+
+
+class FeedTests(support.TestCase):
+    def test_two_feeds_in_one_cycle_are_refused(self):
+        # COR-07: the reference applies one TX word per cycle (the FIFO model takes one push per clock), so a second word in the same cycle would be dropped silently
+        with self.assertRaisesRegex(PioProjectError, "two words in cycle 3"):
+            SimOptions(tx_feed=[(3, 0xAA), (3, 0xBB), (10, 0xCC)])
+        SimOptions(tx_feed=[(3, 0xAA), (4, 0xBB)])                     # one per cycle is fine
+
+    def test_two_feeds_in_one_cycle_to_one_machine_of_a_block_are_refused(self):
+        from pioweave.block import BlockError, BlockSim
+        with self.assertRaisesRegex(BlockError, "machine tx.*two words in cycle 3"):
+            BlockSim(tx_feed={"tx": [(3, 1), (3, 2)]})
+        BlockSim(tx_feed={"a": [(3, 1)], "b": [(3, 2)]})              # different machines have FIFOs of their own

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Project writers for the PIO platform: `platform.build(design, name, build_dir, project=KIND, factory=..., ...)`.
 
 KIND (the user picks what kind of project is needed):
@@ -77,7 +77,7 @@ class SimOptions:
     tx : tuple of int
         Words in the TX FIFO at cycle 0.
     tx_feed : tuple of tuple
-        ``(cycle, word)`` pairs written by the host.
+        ``(cycle, word)`` pairs written by the host, at most one word per cycle (a second word in the same cycle is refused with `PioProjectError`).
     drain : bool
         The host empties the RX FIFO every cycle.
     irq_set, irq_clear : tuple of tuple
@@ -108,6 +108,10 @@ class SimOptions:
             check_stim(self.stim, PioProjectError)
             check_words(self.tx, PioProjectError, "tx")
             check_tx_feed(self.tx_feed, PioProjectError)
+            cycles = [c for c, _ in self.tx_feed]
+            for c in cycles:
+                if cycles.count(c) > 1:
+                    raise PioProjectError("tx_feed has two words in cycle %d; the reference simulation applies one host write per cycle (the emulator and bitweave would apply both and the golden receive list would differ)\n  hint: move one of the words to another cycle" % c)
             for what in ("irq_set", "irq_clear"):
                 for item in getattr(self, what):
                     if len(item) != 2 or not all(isinstance(v, int) and not isinstance(v, bool) for v in item) or item[0] < 0 or not 0 <= item[1] <= 7:
@@ -340,7 +344,21 @@ def _c_pindirs(compiled, info):
 def _c_sm_config(compiled, platform, name):
     """The lines of main.c that configure one state machine, from ``pio_sm_config c = ...`` to ``pio_sm_init``. They use the C variables ``pio``, ``sm`` and ``offset``,
     which the caller declares (`_c_main` for one state machine; `pioweave.block` declares them in a scope of its own for each machine of a block)."""
-    lines = ["    pio_sm_config c = %s_program_get_default_config(offset);" % name]
+    # X, Y and the OSR are not cleared by pio_sm_init / pio_sm_restart (Pico SDK pio_sm_restart: "Not affected: ... the contents of its output shift register, and its X and Y
+    # scratch registers"; RP2040 datasheet CTRL SM_RESTART p.372), the ISR is, but the reference simulation starts all four at 0, so the glue clears them first. The forced
+    # instructions run while the machine is disabled, ignoring the clock divider (RP2040 3.5.7 p.343-344), with the default configuration (no side-set: a forced instruction
+    # would drive a mandatory side-set field), and a restart then puts the shift counters back to "ISR empty, OSR exhausted" (3.5.4 p.338), which MOV OSR / MOV ISR changed.
+    lines = ["    {   // zero X, Y, ISR and OSR as the reference simulation starts them (COR-01)",
+             "        pio_sm_set_enabled(pio, sm, false);",
+             "        pio_sm_config zero_config = pio_get_default_sm_config();",
+             "        pio_sm_set_config(pio, sm, &zero_config);",
+             "        pio_sm_exec(pio, sm, pio_encode_set(pio_x, 0));",
+             "        pio_sm_exec(pio, sm, pio_encode_set(pio_y, 0));",
+             "        pio_sm_exec(pio, sm, pio_encode_mov(pio_isr, pio_null));",
+             "        pio_sm_exec(pio, sm, pio_encode_mov(pio_osr, pio_null));",
+             "        pio_sm_restart(pio, sm);",
+             "    }",
+             "    pio_sm_config c = %s_program_get_default_config(offset);" % name]
     if compiled.set_pin:
         b, n = compiled.set_pin.gpios[0], len(compiled.set_pin.gpios)
         lines += ["    sm_config_set_set_pins(&c, %d, %d);" % (b, n), "    for (uint pin = %d; pin < %d; pin++) pio_gpio_init(pio, pin);" % (b, b + n)] + _c_pindirs(compiled, compiled.set_pin)
@@ -379,10 +397,32 @@ def _c_sm_config(compiled, platform, name):
     return lines
 
 
+def _c_sync_bypass(compileds):
+    """The line of main.c that bypasses the 2-flip-flop input synchroniser for every GPIO a program reads (COR-02).
+
+    The chip adds two system clock cycles of latency to every input unless the bit in INPUT_SYNC_BYPASS is set (RP2040 3.5.6.3 p.342, RP2350 11.5.6.3 p.824); the Amaranth reference
+    simulation and the bitweave cases read the pins without that delay. The register is per PIO block, so one call covers all state machines of a block. The SDK function takes
+    real GPIO numbers (it subtracts the GPIO base itself); the 64-bit variant is used when a GPIO is 32 or higher.
+
+    Returns
+    -------
+    list of str
+        No lines when no program reads a GPIO, else the call (a comment and one statement).
+    """
+    gpios = sorted({g for c in compileds for g in list(c.input_gpios) + list(c.dynamic_gpios) + ([c.jmp_gpio] if c.jmp_gpio is not None else [])})
+    if not gpios:
+        return []
+    mask = sum(1 << g for g in gpios)
+    note = "    // the chip's 2-flip-flop input synchroniser would delay every input by two cycles; the reference simulation has none (RP2040 3.5.6.3 p.342)"
+    if gpios[-1] >= 32:
+        return [note, "    pio_set_input_sync_bypass_with_mask64(pio, 0x%xull, 0x%xull);" % (mask, mask)]
+    return [note, "    pio_set_input_sync_bypass_with_mask(pio, 0x%xu, 0x%xu);" % (mask, mask)]
+
+
 def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=()):
     base = compiled.gpio_base
     lines = ['#include <stdio.h>', '#include "pico/stdlib.h"', '#include "hardware/clocks.h"', '#include "hardware/pio.h"', '#include "%s.pio.h"' % name, "",
-             "// Generated from the Amaranth design by python/pio_project.py. Not run on a chip [verify].", ""]
+             "// Generated from the Amaranth design by pioweave.project. Not run on a chip [verify].", ""]
     if platform.sm_clock_hz:
         lines += ["#define SM_CLOCK_HZ %.1ff" % float(platform.sm_clock_hz), ""]
     lines += ["int main(void) {", "    PIO pio = pio0;"]
@@ -394,6 +434,7 @@ def _c_main(compiled, name, platform, tx=(), tx_feed=(), irq_set=(), irq_clear=(
     else:
         lines += ["    uint sm = pio_claim_unused_sm(pio, true);"]
     lines += ["    uint offset = pio_add_program(pio, &%s_program);" % name]
+    lines += _c_sync_bypass([compiled])
     lines += _c_sm_config(compiled, platform, name)
     if compiled.uses_rx:
         lines.insert(lines.index("int main(void) {") + 1, "    stdio_init_all();")
@@ -506,13 +547,19 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=(), irq_set=()
     host_irq = ["# The simulation case has the host %s IRQ flag %d at the start of cycle %d; this project has no code for it (MicroPython has no call that raises or lowers a PIO IRQ flag [verify])."
                 % ("raise" if k else "lower", f, c) for k, events in ((1, irq_set), (0, irq_clear)) for c, f in events]
     main = "\n".join([
-        "# Generated from the Amaranth design by python/pio_project.py. Not run on a device [verify the rp2 API names against the MicroPython documentation].",
+        "# Generated from the Amaranth design by pioweave.project. Not run on a device [verify the rp2 API names against the MicroPython documentation].",
         ] + (["# This program uses GPIO %d to %d: it needs the PIO GPIO base %d, which MicroPython may not offer [verify]." % (compiled.gpio_base, compiled.gpio_base + 31, compiled.gpio_base)] if compiled.gpio_base else []) + [
         "import rp2",
         "from machine import Pin",
         "from %s_pio import %s" % (name, name), "",
         "sm = rp2.StateMachine(0, %s, %s%s)" % (name, freq, ", ".join(kw)),
-        ] + host_irq + ["sm.put(0x%08x)" % w for w in tx[:compiled.tx_depth]] + [
+        ] + host_irq + [
+        "# X, Y, ISR and OSR start at 0 in the reference simulation but a restart does not clear X, Y or the OSR: clear them, then restart for the shift counters (COR-01) [verify the",
+        "# rp2.StateMachine.exec and .restart names and that a string is encoded without side-set bits; with a mandatory side-set the forced word may drive the side-set pins]",
+        'sm.exec("set(x, 0)")', 'sm.exec("set(y, 0)")', 'sm.exec("mov(isr, null)")', 'sm.exec("mov(osr, null)")', "sm.restart()",
+        ] + (["# The design reads input pins: the chip's 2-flip-flop input synchroniser delays them by two cycles, the reference simulation has none (INPUT_SYNC_BYPASS; MicroPython has no",
+              "# call for it [verify]): expect the program to see each input two cycles later than the simulated one."] if compiled.input_gpios or compiled.dynamic_gpios or compiled.jmp_gpio is not None else []) + [
+        ] + ["sm.put(0x%08x)" % w for w in tx[:compiled.tx_depth]] + [
         "sm.active(1)",
         ] + ["sm.put(0x%08x)       # written by the host after cycle %d in the simulation case" % (w, c) for c, w in tx_feed if compiled.tx_depth] + (
         ["while True:", "    print(\"rx %08x\" % sm.get())"] if compiled.uses_rx else []) + [""])
@@ -521,7 +568,7 @@ def _micropython(compiled, name, platform, pioasm, tx=(), tx_feed=(), irq_set=()
 
 def _readme(compiled, name, project, platform, have_golden):
     k = {"pio": "the PIO program", "pico-c": "a Pico SDK C project", "micropython": "a MicroPython project"}[project]
-    out = ["# %s" % name, "", "Generated by `platform.build(..., project=%r)` of python/platform_rp.py for the %s: %s." % (project, platform.chip, k), "",
+    out = ["# %s" % name, "", "Generated by `platform.build(..., project=%r)` of pioweave.platform for the %s: %s." % (project, platform.chip, k), "",
            "States of the Amaranth design and the PIO instruction each one became (a state without effect that follows an instruction is folded into its delay):", ""]
     for st, idx in compiled.states:
         out.append("- %s: %s" % (st, "instruction %d" % idx if idx is not None else "part of the delay of the instruction before it"))

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """What the Amaranth-to-PIO compiler refuses, and why each design below is outside the subset because mapping it would change its cycle
 behaviour or needs hardware PIO does not have. Every refusal must name the reason; none may be approximated."""
 import os
@@ -531,6 +531,23 @@ class DataPathRefusalTests(RefusalCase):
             fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
         self.refuse(body, "side-set value differs between waiting and completing")
 
+    def test_side_set_must_agree_in_both_branches_of_a_test(self):
+        # COR-44: one PIO instruction applies one side-set value, so the two branches of a test (jmp pin) cannot drive the side-set pin differently
+        def body(m, pl):
+            side = pl.buffer(m, "o", "gpio", 3)
+            pl.pio_role(side, "side")
+            pin = pl.buffer(m, "i", "gpio", 4)
+
+            def a():
+                with m.If(pin.i):
+                    m.d.sync += side.o.eq(1)
+                    m.next = "B"
+                with m.Else():
+                    m.d.sync += side.o.eq(0)
+                    m.next = "A"
+            fsm_states(m, [("A", a), ("B", lambda: setattr(m, "next", "A"))])
+        self.refuse(body, "side-set value differs between the two branches of the test")
+
     def test_a_blocking_operation_needs_its_helper(self):
         def states(m, sh, x, y, out, inp):
             def a():
@@ -608,12 +625,12 @@ class DataPathRefusalTests(RefusalCase):
             fsm_states(m, [("A", lambda: setattr(m, "next", "A"))])
         self.refuse(body, "submodules are not supported")
 
-    # ----------------------------------------------------------------------------- the version gate and the FSM state names (python/pioweave/src/pioweave/_compat.py)
+    # ----------------------------------------------------------------------------- the version gate and the FSM state names (pioweave/_compat.py)
     def test_version_gate(self):
         from pioweave._compat import UnsupportedAmaranth, check_version
-        for ok in ("0.5.0", "0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):
+        for ok in ("0.5.1", "0.5.9", "0.5.10", "0.6.0.dev140"):
             self.assertTrue(check_version(ok, allow=False))
-        for bad in ("0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
+        for bad in ("0.5.0", "0.5.11", "0.4.5", "0.6.0", "0.6.0.dev141", "1.0.0", "nonsense", "0.5", "0.5.1rc1"):
             with self.assertRaisesRegex(UnsupportedAmaranth, "tested with Amaranth"):
                 check_version(bad, allow=False)
             with self.assertWarns(UserWarning):                     # the override lets it through with an UntestedAmaranthWarning (audit S-13)

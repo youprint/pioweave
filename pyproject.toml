@@ -27,9 +27,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
-    "Typing :: Typed",
 ]
-dependencies = ["amaranth>=0.5,<0.6"]
+dependencies = ["amaranth>=0.5.1,<0.6"]
 
 [project.optional-dependencies]
 test = ["coverage"]

@@ -78,6 +78,8 @@ The command line
    python -m pioweave list                                          # the example designs and their chips
    python -m pioweave doctor [--strict]                             # check this environment
    python -m pioweave build DESIGN OUTDIR [options]
+   python -m pioweave emulate DESIGN [options]                      # run a design in the emulator (see the emulator page)
+   python -m pioweave new NAME [--template T] / new --list          # scaffold a project (see getting started)
 
 ``DESIGN`` is an example name or ``module:Class`` of your own ``PioDesign`` / ``Elaboratable``. ``module`` is imported with the current directory first on ``sys.path`` and its top-level code runs, and the class (or any callable without arguments) is called to make the design: run ``build`` and ``emulate`` only on designs you trust, in a directory you trust, and never pass a ``DESIGN`` that comes from untrusted input. (The chip is checked before the module is imported, so a missing ``--chip`` does not run any code.) It writes the project to ``OUTDIR/project`` and prints ``EMIT {"path": ".../NAME.pio"}``, which is what a bitweave ``generator = [...]`` expects. Options:
 

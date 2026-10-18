@@ -433,18 +433,64 @@ class EmulatorTests(support.TestCase):
         a.run(2)
         self.assertTrue(b.irq == 0b100 and a.irq == 0)
 
+    def pair(self):
+        """Two RP2350 blocks, b the next higher-numbered block of a (a.neighbours[1] is b, b.neighbours[-1] is a)."""
+        a, b = PioBlock(version=1), PioBlock(version=1)
+        a.neighbours[1], b.neighbours[-1] = b, a
+        return a, b
+
+    def test_wait_1_irq_prev_waits_for_the_flag_of_the_lower_block_and_clears_it(self):
+        # RP2350 11.4.7 / 11.4.11: PREV and NEXT select the IRQ flags of the neighbouring PIO blocks; "wait 1 irq" lowers the flag it waited for when it passes
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.wait_irq(1, 3, other="prev")
+        p.set(X, 7)
+        sm = b.sm[0]
+        sm.configure(program=b.load(p)).enable()
+        for _ in range(3):
+            b.step()
+        self.assertEqual((sm.x, a.irq), (0, 0))                # no flag yet: the wait stalls
+        a.irq_force(1 << 3)
+        b.step()                                               # the wait passes, the flag of block a goes down at the end of the cycle
+        b.step()
+        self.assertEqual((sm.x, a.irq, b.irq), (7, 0, 0))
+
+    def test_wait_0_irq_next_passes_on_a_clear_flag_and_leaves_a_raised_one(self):
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.wait_irq(0, 2, other="next")
+        p.set(X, 5)
+        sm = a.sm[0]
+        sm.configure(program=a.load(p)).enable()
+        b.irq_force(1 << 2)
+        for _ in range(3):
+            a.step()
+        self.assertEqual((sm.x, b.irq), (0, 1 << 2))           # stalls while the neighbour's flag is up, does not clear it
+        b.irq_clear(1 << 2)
+        a.step()
+        a.step()
+        self.assertEqual(sm.x, 5)
+
+    def test_irq_clear_prev_lowers_the_flag_of_the_lower_block(self):
+        a, b = self.pair()
+        p = prog("rp2350")
+        p.irq(2, mode=CLEAR, other="prev")
+        a.irq_force(0b100)
+        b.sm[0].configure(program=b.load(p)).enable()
+        b.step()
+        self.assertEqual(a.irq, 0)
+
     def test_empty_instruction_memory_and_reserved_encodings_raise(self):
         block = PioBlock()
         block.sm[0].enable()
         with self.assertRaisesRegex(EmulationError, "empty instruction memory"):
             block.run(1)
-        for word, match in ((0x4080, "IN source"), (0xE0C0, "SET destination"), (0xA0C0 | 0x18, "MOV operation"), (0xA004 | 0x0, None)):
+        for word, match in ((0x4080, "IN source"), (0xE0C0, "SET destination"), (0xA0C0 | 0x18, "MOV operation"), (0xA004, "MOV source 100")):
             b = PioBlock()
             b.mem[0] = word
             b.sm[0].enable()
-            if match:
-                with self.assertRaisesRegex(EmulationError, match):
-                    b.run(1)
+            with self.assertRaisesRegex(EmulationError, match):
+                b.run(1)
 
     def test_version_0_refuses_wait_jmppin_and_mov_pindirs(self):
         for word, match in ((0x20E0, "WAIT source 11"), (0xA060, "MOV PINDIRS")):
@@ -484,3 +530,81 @@ class EmulatorTests(support.TestCase):
         r = run_case(p, 6, set_base=0, set_count=1, dirs=1, record=True)
         v = to_vcd(r.trace, [0])
         self.assertTrue("$var wire 1 ! pin0 $end" in v and "#0" in v and "1!" in v and "0!" in v)
+
+
+@support.cases
+class RestartTests(support.TestCase):
+    """COR-01: SM_RESTART. Expected values from the RP2040 datasheet, CTRL register field SM_RESTART (p.372) and 3.5.4 (p.338), not from the code under test: a restart clears the input
+    and output shift counters, the contents of the ISR, the delay counter, the waiting-on-IRQ state, a stalled forced or EXEC instruction and OUT_STICKY pin writes; it does not
+    affect the program counter, the contents of the OSR or the X and Y registers. Power-on values of X and Y are not given by the datasheet (the model starts them at 0)."""
+
+    def machine(self):
+        b = PioBlock()
+        return b, b.sm[0]
+
+    def test_restart_leaves_x_y_osr_and_pc_alone(self):
+        b, sm = self.machine()
+        sm.x, sm.y, sm.osr, sm.pc = 5, 6, 0xDEAD, 3
+        sm.restart()
+        self.assertEqual((sm.x, sm.y, sm.osr, sm.pc), (5, 6, 0xDEAD, 3))
+
+    def test_restart_clears_the_isr_the_shift_counters_and_the_delay(self):
+        b, sm = self.machine()
+        sm.isr, sm.isr_count, sm.osr_count, sm.delay_left = 0xFFFF, 16, 7, 4
+        sm.restart()
+        self.assertEqual((sm.isr, sm.isr_count, sm.osr_count, sm.delay_left), (0, 0, 32, 0))
+
+    def test_restart_does_not_touch_the_fifos_or_the_enable(self):
+        b, sm = self.machine()
+        sm.put(7)
+        sm.enable()
+        sm.restart()
+        self.assertTrue(sm.enabled and len(sm.tx) == 1)
+
+    def test_restart_clears_a_stalled_forced_instruction(self):
+        b, sm = self.machine()
+        sm.force(0x80A0)                                                   # pull block on an empty TX FIFO: stalls
+        sm.enable()
+        for _ in range(3):
+            b.step()
+        self.assertIsNotNone(sm.cur_forced)
+        sm.restart()
+        self.assertIsNone(sm.cur_forced)
+        self.assertIsNone(sm.exec_word)
+
+    def test_reset_is_the_power_on_state_and_restart_after_use_keeps_x(self):
+        b, sm = self.machine()
+        sm.x = 9
+        sm.reset()
+        self.assertEqual((sm.x, sm.y, sm.isr, sm.osr, sm.pc, sm.osr_count, sm.enabled), (0, 0, 0, 0, 0, 32, False))
+
+    def test_a_forced_instruction_that_completes_runs_before_a_pending_executee(self):
+        # COR-12: documents the model (the datasheet, RP2040 3.5.7 p.344 CAUTION, only says that a forced instruction that STALLS overwrites the executee)
+        p = prog()
+        p.pull()
+        p.out(EXEC, 16)
+        p.nop()
+        b = PioBlock()
+        sm = b.sm[0]
+        sm.configure(program=b.load(p))
+        sm.put(0xE025)                                   # set x, 5 in the low 16 bits
+        sm.enable()
+        b.step()
+        b.step()                                         # the OUT has latched the executee, which runs next
+        sm.force(0xE029)                                 # set x, 9
+        b.step()
+        self.assertEqual(sm.x, 9)
+        b.step()
+        self.assertEqual(sm.x, 5)
+
+
+class VcdTests(support.TestCase):
+    def test_identifiers_avoid_the_dollar_sign_and_are_unique(self):
+        # COR-39: the fourth pin got "$", which is legal in the VCD grammar but starts the keywords ($var, $end) and confuses some viewers
+        p = prog()
+        p.set(PINS, 31)
+        r = run_case(p, 2, set_base=0, set_count=5, dirs=31, record=True)
+        text = to_vcd(r.trace, [0, 1, 2, 3, 4])
+        idents = [line.split()[3] for line in text.splitlines() if line.startswith("$var")]
+        self.assertEqual(len(set(idents)), 5)
+        self.assertNotIn("$", "".join(idents))

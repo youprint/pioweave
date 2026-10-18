@@ -3,6 +3,8 @@ Study: a Python / Amaranth package for the PIO tooling
 
 Rename (owner, 2026-10-17, after this study): the packages amaranth-rp, amaranth-rp-builder and amaranth-rp-boards are now called pioweave, pioweave-builder and pioweave-boards (imports pioweave, pioweave.builder, pioweave.boards; the install component is ``pioweave``; the environment variable is PIOWEAVE_ALLOW_UNTESTED). The names were free on PyPI on 2026-10-17. The rest of this note keeps the old names.
 
+File names in this study: the study was written before the code moved to this repository, so "today" and ``<bitweave>/python`` describe the old layout. The old names are now ``pioprog.py`` = ``pioweave/builder/program.py``, ``platform_rp.py`` = ``pioweave/platform.py``, ``pio_compile.py`` = ``pioweave/compile.py``, ``pio_project.py`` = ``pioweave/project.py``, ``pio_designs.py`` = ``pioweave/designs.py`` and ``<bitweave>/python`` = the root of this repository.
+
 Question (owner, 2026-10-17): can the PIO tooling become a proper Python Amaranth module, and how would it be structured? This note records how Amaranth packages are built, three things "module" can mean, five proposals, and a recommendation. Decision (owner, 2026-10-17): P2 (two packages) with P4 (local install), named amaranth-rp-builder and amaranth-rp, no boards package now, ``bitweave install rp-pio`` allowed. The MCP server and the Rust flows keep the name Bitweave. Implemented 2026-10-17; the rest of this note is the study that led to it.
 
 1. How Amaranth packages are structured (read from the installed 0.5.10 and from amaranth-boards 0.0.21)
@@ -93,7 +95,7 @@ Convention says ``amaranth-<thing>`` / ``amaranth_<thing>``; that prefix suggest
 - Public entry points: the builder API and ``RP2040PioPlatform ... RP2354BPioPlatform``; ``Program`` stays free of Amaranth imports in P2.
 - Command line: ``python -m bitweave_pio build DESIGN --chip ... --project ...`` replaces the two generator scripts and is what a bitweave ``generator = [...]`` calls.
 - Tests move to ``tests/`` of each package; the co-simulation needs the bitweave binary and pioasm, and is skipped when they are missing (as today).
-- Typing and docs: ``py.typed``, docstrings, the two design notes as the manual.
+- Typing and docs: docstrings (no ``py.typed``: the code is not annotated), the two design notes as the manual.
 - Licence and headers: as in LICENSE; no third-party code is copied (the grammar facts of pioasm and the datasheets are read as facts).
 
 6. Migration steps and effort for P2 + P4 [estimate]

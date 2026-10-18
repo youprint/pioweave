@@ -1,11 +1,11 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Amaranth platforms for the PIO blocks of the Raspberry Pi RP2040, RP2350 (A, B) and RP2354 (A, B) (design note docs/design-notes/amaranth-pio.rst).
 
 Amaranth has one platform module per target (amaranth.build.Platform; the vendor modules are in amaranth.vendor). This is the one for the
 PIO blocks of the RP chips. A design is an ordinary Amaranth Elaboratable written in a restricted style (one FSM; one FSM state is one PIO
 instruction; pins come from `platform.request(name, n, dir="-")` wrapped in `amaranth.lib.io.Buffer`, or from `platform.buffer(m, "o", name, n)`; the
 scratch registers X and Y from `platform.scratch()`). `platform.build(design, name,
-build_dir, project=...)` compiles the FSM to PIO instructions (pio_compile.py) and writes the project the user asked for (pio_project.py):
+build_dir, project=...)` compiles the FSM to PIO instructions (pioweave.compile) and writes the project the user asked for (pioweave.project):
 
     project="pio"          the PIO program and the bitweave simulation cases (expectations from the Amaranth simulation)
     project="pico-c"       a Pico SDK C project (CMakeLists.txt, main, the .pio file, bitweave.toml)
@@ -139,7 +139,7 @@ class _RPPioPlatform(Platform):
     def __init__(self, sm_clock_hz=None):
         super().__init__()
         self.sm_clock_hz = sm_clock_hz
-        self.simulation = False      # True: request() returns io.SimulationPort objects, which the Amaranth simulator can drive (pio_project.amaranth_waves)
+        self.simulation = False      # True: request() returns io.SimulationPort objects, which the Amaranth simulator can drive (pioweave.project.amaranth_run)
         self._pio_pins = []
         self._scratch = {}
         self._shifter = None

@@ -104,7 +104,7 @@ class Config:
     Attributes
     ----------
     in_base, in_count : int
-        First pin of the IN mapping and its width (32 at reset; IN_COUNT exists on PIO version 1 only, RP2350 Table 1053 p.858).
+        First pin of the IN mapping and its width (32 at reset; IN_COUNT exists on PIO version 1 only, RP2350 Table 1053 p.858; `StateMachine.configure` takes 0 as 32, the register encoding).
     out_base, out_count : int
         First pin of the OUT mapping and its width (0 at reset, RP2040 Table 386 p.378).
     set_base, set_count : int
@@ -125,17 +125,15 @@ class Config:
         The side-set field: bit count (including the enable bit of an optional side-set), optional, and whether it drives pin directions.
     status_sel : str
         The ``mov status`` source: ``"tx"`` (all-ones if the TX FIFO level is below `status_n`), ``"rx"`` (the RX FIFO level), or on PIO version 1 ``"irq"`` (all-ones if the
-        indexed IRQ flag is raised). RP2040 Table 382 p.377, RP2350 Table 1052 p.857.
+        indexed IRQ flag is raised). RP2040 Table 382 p.376, RP2350 Table 1052 p.856.
     status_n : int
         The level, or the IRQ flag: 0 to 7 for a flag of this block, 8 to 15 for a flag of the next lower-numbered block, 16 to 23 for the next higher-numbered block (RP2350
-        Table 1052 p.857).
+        Table 1052 p.856).
     fifo_join : str
         ``"none"``, ``"tx"`` (TX FIFO 8 deep, RX FIFO unavailable), ``"rx"`` (the reverse), ``"both"`` (both unavailable: FJOIN_TX and FJOIN_RX set, RP2040 3.5.3 p.335); on PIO
         version 1 also ``"rx_put"``, ``"rx_get"`` or ``"rx_put_get"``.
     clkdiv : float
         The clock divider, 1.0 to 65536 in steps of 1/256 (1.0 at reset; the register field INT = 0 means 65536, RP2040 Table 381 p.376).
-    sync_bypass : bool
-        Unused; the synchronisers are bypassed per GPIO with `PioBlock.sync_bypass` (INPUT_SYNC_BYPASS).
     out_sticky : bool
         EXECCTRL_OUT_STICKY: the most recent OUT / SET pin write is asserted again on every cycle (RP2040 Table 382 p.376; the exact behaviour is [verify]).
     inline_out_en : bool
@@ -145,7 +143,7 @@ class Config:
         EXECCTRL_OUT_EN_SEL: the data bit used as the inline OUT enable.
     """
     __slots__ = ("in_base", "in_count", "out_base", "out_count", "set_base", "set_count", "side_base", "jmp_pin", "in_right", "out_right", "autopush", "autopull", "push_thresh",
-                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "sync_bypass", "out_sticky", "inline_out_en", "out_en_sel")
+                 "pull_thresh", "wrap_bottom", "wrap_top", "side_bits", "side_opt", "side_pindirs", "status_sel", "status_n", "fifo_join", "clkdiv", "out_sticky", "inline_out_en", "out_en_sel")
 
     def __init__(self):
         self.in_base = self.out_base = self.set_base = self.side_base = self.jmp_pin = 0
@@ -160,7 +158,6 @@ class Config:
         self.status_sel, self.status_n = "tx", 0
         self.fifo_join = "none"                          # none, tx, rx; version 1 also rx_put, rx_get, rx_put_get
         self.clkdiv = 1.0
-        self.sync_bypass = False
         self.out_sticky = self.inline_out_en = False
         self.out_en_sel = 0
 
@@ -211,16 +208,38 @@ class StateMachine:
 
     # ------------------------------------------------------------------ host side
     def reset(self):
-        """Restart the state machine (SM restart and clock divider restart): registers cleared, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.338: nothing shifted in,
-        nothing left to shift out), FIFOs emptied, clock divider restarted; the PC is not set (use `set_pc`).
+        """Return the state machine to the power-on state of the model: PC, X, Y, ISR and OSR 0, ISR shift counter 0 and OSR shift counter 32 (RP2040 3.5.4 p.338: nothing
+        shifted in, nothing left to shift out), FIFOs emptied, clock divider restarted, everything else cleared, the state machine disabled.
 
-        The state machine is left disabled."""
+        The datasheets do not state a power-on value for X, Y, the ISR or the OSR (they have no reset value in the register list); the model starts them at 0, as the Amaranth
+        reference simulation does, and the generated C and MicroPython projects clear them explicitly. `restart` is the SM_RESTART of the chip and does not do this."""
         self.pc = 0
         self.x = self.y = 0
         self.isr = self.osr = 0
-        self.isr_count, self.osr_count = 0, 32
         self.tx, self.rx = Fifo(4), Fifo(4)
         self.rx_regs = [0, 0, 0, 0]
+        self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
+        self.executed = self.stall_cycles = self.delay_cycles = 0
+        self.rx_lost = self.tx_dropped = 0
+        self.last = ("-", 0, 0)
+        self.restart()
+        self.clkdiv_restart()
+        self._apply_join()
+
+    def restart(self):
+        """The SM_RESTART of the chip (CTRL register, RP2040 p.372, RP2350 p.851-852; `pio_sm_restart` in the Pico SDK).
+
+        Cleared: the input and output shift counters (ISR 0, OSR 32), the contents of the ISR, the delay counter, the waiting-on-IRQ state, any stalled instruction written to
+        SMx_INSTR or run by OUT / MOV EXEC, and any pin write left asserted by OUT_STICKY. Not affected: the program counter, the contents of the OSR, the X and Y registers (the
+        datasheet says so in so many words), the FIFOs, the enable and the clock divider (see `clkdiv_restart`).
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+        """
+        self.isr = 0
+        self.isr_count, self.osr_count = 0, 32
         self.delay_left = 0
         self.side_done = False
         self.in_shifted = False
@@ -230,14 +249,20 @@ class StateMachine:
         self.cur_source = "exec"                          # where the latched instruction came from: "exec" (OUT / MOV EXEC) or "host" (SMx_INSTR)
         self.force_fresh = False                          # a host-forced instruction that has not been tried yet
         self.saved_flags = None
+        self.sticky = {}                                  # OUT_STICKY: the most recent OUT / SET write per target (levels or directions)
+        return self
+
+    def clkdiv_restart(self):
+        """Restart the clock divider (CLKDIV_RESTART; `pio_sm_clkdiv_restart` in the Pico SDK): the next period starts afresh.
+
+        Returns
+        -------
+        StateMachine
+            `self`.
+        """
         self.cd_left = 0                                  # clock divider: system cycles left in the current division period (0 = not started)
         self.cd_total = 0                                 # clock divider: running total of the fractional part, in 1/256
-        self.sticky = {}                                  # OUT_STICKY: the most recent OUT / SET write per target (levels or directions)
-        self.enabled = False                              # like the hardware, a state machine runs only after the host enabled it: sm.enable()
-        self.executed = self.stall_cycles = self.delay_cycles = 0
-        self.rx_lost = self.tx_dropped = 0
-        self.last = ("-", 0, 0)
-        self._apply_join()
+        return self
 
     def _apply_join(self):
         """FIFO depths (TX, RX): 4 and 4; joined to 8 and 0 or 0 and 8, or 0 and 0 with both join bits (RP2040 3.5.3 p.335: "Setting both FJOIN_RX and FJOIN_TX makes both FIFOs
@@ -293,6 +318,10 @@ class StateMachine:
                 raise ValueError("%s must be 1..32" % key)
         if c.fifo_join not in ("none", "tx", "rx", "both", "rx_put", "rx_get", "rx_put_get"):
             raise ValueError("fifo_join: none, tx, rx, both, rx_put, rx_get or rx_put_get")
+        if not 0 <= c.in_count <= 32:
+            raise ValueError("in_count is 0 to 32")
+        if c.in_count == 0:                       # RP2350 Table 1053 p.857-858: "A count of 32 is encoded with a field value of 0"
+            c.in_count = 32
         if c.status_sel not in ("tx", "rx", "irq"):
             raise ValueError("status_sel: tx, rx or irq")
         if c.status_sel == "irq" and self.block.version < 1:
@@ -360,11 +389,11 @@ class StateMachine:
         return self.rx.pop()
 
     def force(self, word):
-        """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.344, RP2350 11.5.7 p.826): the instruction executes
+        """Execute `word` in the next cycle instead of the program (writing SMx_INSTR). As the datasheets say (RP2040 3.5.7 p.343-344, RP2350 11.5.7 p.825): the instruction executes
         immediately, "ignoring the state machine clock divider" and whether or not the state machine is enabled (it is how the SDK sets a state machine up), its delay cycles
         are ignored, and the program counter does not advance, so the program continues where it left off unless the forced instruction jumps. A forced instruction may stall; it is
-        then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it replaces an OUT / MOV EXEC instruction in
-        flight. Its side-set is applied like any other [verify].
+        then latched and retried on the cycles in which the state machine runs, until it completes (EXECCTRL_EXEC_STALLED), and it shares the latch of an OUT / MOV EXEC instruction (RP2040 3.5.7 p.344 CAUTION: a forced instruction that stalls overwrites the executee in flight). The model runs a forced instruction that completes
+        first and then still runs the pending executee; whether the chip does is not stated in the datasheet [verify on a chip]. Its side-set is applied like any other [verify].
 
         Parameters
         ----------
@@ -418,7 +447,7 @@ class StateMachine:
     def _status(self):
         c = self.cfg
         if c.status_sel == "irq":
-            mode, flag = (c.status_n >> 3) & 3, c.status_n & 7           # 0: this block, 1: next lower-numbered block, 2: next higher-numbered (RP2350 Table 1052 p.857)
+            mode, flag = (c.status_n >> 3) & 3, c.status_n & 7           # 0: this block, 1: next lower-numbered block, 2: next higher-numbered (RP2350 Table 1052 p.856)
             if mode == 3:
                 raise EmulationError("STATUS_N 24 to 31 is reserved for an IRQ status")
             block = self.block if mode == 0 else self.block.neighbour(-1 if mode == 1 else 1)
@@ -426,7 +455,7 @@ class StateMachine:
                 raise EmulationError("MOV status refers to an IRQ flag of another PIO block that is not part of this emulation")
             on = bool(block.irq & (1 << flag))
         elif c.status_sel == "rx":
-            on = len(self.rx) < c.status_n
+            on = len(self.rx) < c.status_n        # [verify] status_n above the FIFO depth is accepted here (the RP2350 datasheet calls such values reserved)
         else:
             on = len(self.tx) < c.status_n
         return MASK32 if on else 0
@@ -473,7 +502,7 @@ class StateMachine:
     def _exec(self, word, view, ctx):
         """Execute one word. Returns (status, jump) with status 'done' or 'stall'; pin writes go to ctx.writes, IRQ changes to ctx.irq_set / ctx.irq_clear."""
         c, blk = self.cfg, self.block
-        first = not self.side_done
+        first = not self.side_done      # [verify] side-set is applied once per instruction, not again on each retry of a stalled one (the datasheet says: on the first cycle)
         op, a = word >> 13, word & 0xFF
         is_out = False
         jump = None
@@ -527,6 +556,8 @@ class StateMachine:
             res = "done" if level == pol else "stall"
         elif op == 2:                                                        # IN
             n = 32 if a & 31 == 0 else a & 31
+            # [verify on a chip] a stalled IN with autopush (RX FIFO full) is modelled as shifting once and retrying only the push; the datasheet pseudocode (RP2040 3.5.4.1 p.338)
+            # does not say whether the retry shifts again (audit COR-09)
             if not self.in_shifted:
                 s = (a >> 5) & 7
                 if s == 0:
@@ -579,9 +610,9 @@ class StateMachine:
                     self.exec_word = data & 0xFFFF
                 self._background_pull()
         elif op == 4:                                                        # PUSH / PULL (and MOV to / from the RX FIFO registers on version 1)
-            if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0 and not word & 4:
+            if blk.version >= 1 and word & 0x10 and (word >> 5) & 3 == 0:       # bits 7:4 = x001 (RP2350 Table 1027); Index is bits 2:0, IdxI bit 3
                 if not word & 8 and word & 7:
-                    raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.810)")
+                    raise EmulationError("MOV rxfifo[y]: a non-zero Index with IdxI clear is a reserved encoding (RP2350 11.4.8 p.809)")
                 idx = (word & 3) if word & 8 else (self.y & 3)
                 if not word & 0x80:
                     if c.fifo_join not in ("rx_put", "rx_put_get"):
@@ -701,7 +732,7 @@ class StateMachine:
 
     def _step(self, view, ctx):
         """One state machine clock cycle."""
-        c, blk = self.cfg, self.block
+        blk = self.block
         if self.cur_forced is not None:                                    # a latched instruction: a forced one that stalled, or the executee of OUT / MOV EXEC
             word, source = self.cur_forced, self.cur_source
             self.cur_forced = None
@@ -748,7 +779,7 @@ class StateMachine:
                     self.side_done, self.in_shifted, self.irq_set_done = self.saved_flags
                     self.saved_flags = None
             else:
-                # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies (RP2040 3.4.5.2 p.327); those of a forced instruction are ignored too (3.5.7 p.345)
+                # delays of OUT EXEC / MOV EXEC are ignored: the executee's own applies (RP2040 3.4.5.2 p.326); those of a forced instruction are ignored too (3.5.7 p.344)
                 self.delay_left = 0 if self.exec_word is not None else self._delay_of(word)
             if jump is not None:
                 self.pc = jump & 31
@@ -758,7 +789,7 @@ class StateMachine:
             self._background_pull()
 
     def _clock_enable(self):
-        """The fractional clock divider: True in the system clock cycles in which the state machine advances. Following RP2040 3.5.5 p.339-340 (RP2350 11.5.5 p.822-823): the divider
+        """The fractional clock divider: True in the system clock cycles in which the state machine advances. Following RP2040 3.5.5 p.339-340 (RP2350 11.5.5 p.821-822): the divider
         counts a division period of n system clock cycles and emits an enable pulse at its end; it keeps a running total of the fractional part (first-order delta-sigma) of each
         period, and every time this total wraps through 1 the next period is n + 1 cycles. The average rate is 1 / (n + f/256). The datasheet does not say where the first period
         starts after the state machine is enabled; here a period starts on the first enabled cycle (with a divisor of 1 the enable is asserted on every cycle, Figure 45) [verify]."""
@@ -836,7 +867,7 @@ class PioBlock:
         0, or 16 on PIO version 1 (the 48-GPIO parts).
     sync_cycles : int
         Cycles of the input synchroniser: 2 by default, a "standard 2-flipflop synchroniser" on each GPIO input that is engaged unless the INPUT_SYNC_BYPASS bit of the GPIO is
-        set (RP2040 3.5.6.3 p.342 and Table 376 p.375, RP2350 11.5.6.3 p.825); 0 bypasses it for every GPIO.
+        set (RP2040 3.5.6.3 p.342 and Table 376 p.374, RP2350 11.5.6.3 p.824); 0 bypasses it for every GPIO.
     loopback : str
         How a state machine sees its own block's outputs. ``"direct"`` (the default, the convention of bitweave's simulator and of pioweave's Amaranth simulation): an instruction
         sees the pin levels written by the previous cycle's instruction. ``"datasheet"``: "a state machine observing its own outputs is subject to ... a two-cycle delay when
@@ -1086,14 +1117,14 @@ class PioBlock:
             elif run:
                 sm._step(view, ctx)
         # apply the effects in state machine order, so that the highest-numbered state machine wins on a pin (levels and directions separately) when several write it in the same
-        # cycle (RP2040 3.5.6.1 p.341-342, RP2350 11.5.6.1 p.824-825); within one state machine the side-set was staged after the OUT / SET and so wins (RP2040 3.5.1 p.332)
+        # cycle (RP2040 3.5.6.1 p.341-342, RP2350 11.5.6.1 p.823-824); within one state machine the side-set was staged after the OUT / SET and so wins (RP2040 3.5.1 p.332)
         for dirs, pin, bit in ctx.writes:
             if dirs:
                 self.dirs = (self.dirs & ~(1 << pin)) | (bit << pin)
             else:
                 self.out_level = (self.out_level & ~(1 << pin)) | (bit << pin)
         self.irq &= ~sum(1 << f for f in ctx.irq_clear)
-        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.799 and 11.4.11 p.814)
+        self.irq |= sum(1 << f for f in ctx.irq_set)       # a flag that is set and cleared in the same cycle ends up set (RP2350 11.2.8 p.798)
         for nb, f in ctx.irq_clear_other:
             nb.irq &= ~(1 << f)
         for nb, f in ctx.irq_set_other:

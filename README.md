@@ -33,6 +33,8 @@ class UartTx(PioDesign):                       # 8N1 transmitter, two clock cycl
                 m.next = "START"
             with m.State("START"):
                 m.d.sync += [tx.o.eq(0), x.eq(7)]
+                m.next = "START_HOLD"
+            with m.State("START_HOLD"):       # no effect: becomes the delay of START, so the start bit lasts 2 cycles
                 m.next = "BIT"
             with m.State("BIT"):
                 sh.out(m, tx)                  # out pins, 1
@@ -56,7 +58,7 @@ This compiles to
 .program uart_tx
 .side_set 1 opt
     pull block side 1 [1]
-    set x, 7 side 0
+    set x, 7 side 0 [1]
 s_BIT:
     out pins, 1
     jmp x-- s_BIT
@@ -67,8 +69,8 @@ s_BIT:
 Early (version 0.1.0). Everything below was checked in simulation and against the real `pioasm`; **nothing has run on a chip yet**, and the generated MicroPython code has not run on a device.
 
 - The builder's own encoder agrees with `pioasm` on 10,681 instruction words in 351 programs.
-- 450 random Amaranth designs without and 340 with a data path agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all seventeen example designs; the data-path designs use, in half of the seeds, autopull and autopush with thresholds, `pull ifempty`, `push iffull`, `mov` with the OSR, ISR, pins and status, `in isr/osr`, `out isr`, `jmp !osre`, IRQ flags with host events (compared after every cycle), `wait pin` and joined FIFOs, and about 40 percent of them (30 percent of the control-flow designs) have a pin direction register and use `out pindirs`, `mov pindirs` (RP2350), `set pindirs` and a side-set that writes directions, compared on the pad and on the direction of every pin, cycle by cycle. The Python emulator agrees with the Amaranth simulation on 600 of those designs and with bitweave's simulator, cycle by cycle, on random programs.
-- The whole test suite passes on Amaranth 0.5.10 (904 tests, 1 skipped, with `PIO_COSIM_N=40` random designs of each kind; run 2026-10-17 on the merge of the pin direction support and the block layer), including real Pico SDK builds of the generated C projects; before the block layer was added its default run (367 tests, without the SDK builds) also passed on 0.5.1 and the 0.6 development version 0.6.0.dev140, and the quick suite on 0.5.0, 0.5.1 and 0.6.0.dev140 (0.5.2 to 0.5.9 were last run before the autopull, IRQ and `wait pin` support was added); the pin direction and block tests have not been run on the other versions.
+- 450 random Amaranth designs without and 340 with a data path (the results of separate long runs with `PIO_COSIM_N` set; the default test run uses 15 of each kind) agree with bitweave's PIO simulator pin by pin and cycle by cycle, as do all seventeen example designs; the data-path designs use, in half of the seeds, autopull and autopush with thresholds, `pull ifempty`, `push iffull`, `mov` with the OSR, ISR, pins and status, `in isr/osr`, `out isr`, `jmp !osre`, IRQ flags with host events (compared after every cycle), `wait pin` and joined FIFOs, and about 40 percent of them (30 percent of the control-flow designs) have a pin direction register and use `out pindirs`, `mov pindirs` (RP2350), `set pindirs` and a side-set that writes directions, compared on the pad and on the direction of every pin, cycle by cycle. The Python emulator agrees with the Amaranth simulation on 600 of those designs and with bitweave's simulator, cycle by cycle, on random programs. The Amaranth data path was written to match the emulator, so the Amaranth-versus-emulator agreement holds by construction and is not independent evidence; bitweave's simulator (a separate implementation by the same author from the same datasheets) and the directed tests with hand-derived expectations (`tests/test_amaranth_datasheet.py`, `tests/test_emulator_datasheet.py`) are the independent checks, and nothing has been compared with a chip.
+- The whole test suite passes on Amaranth 0.5.10 (904 tests, 1 skipped, with `PIO_COSIM_N=40` random designs of each kind; run 2026-10-17 on the merge of the pin direction support and the block layer), including real Pico SDK builds of the generated C projects; before the block layer was added its default run (367 tests, without the SDK builds) also passed on 0.5.1 and the 0.6 development version 0.6.0.dev140, and the quick suite on 0.5.1 and 0.6.0.dev140 (0.5.0 is not supported: it has no `io.SimulationPort`) (0.5.2 to 0.5.9 were last run before the autopull, IRQ and `wait pin` support was added); the pin direction and block tests have not been run on the other versions.
 - Several state machines in one design (`pioweave.block`, [docs/blocks.rst](docs/blocks.rst)): single-machine designs run as state machines 0 to 3 of one block with shared IRQ flags and pins, one program memory (at most 32 instructions in all) and one project (a `.pio` file with a program per machine, a `bitweave.toml` with one case per machine, a Pico SDK `main.c` that starts the machines together). The four example blocks and 1,000 random blocks of two to four machines agree between the Amaranth simulation of the whole block and the emulator, cycle by cycle; bitweave's simulator runs one machine per case, so the combined behaviour is checked against the emulator and the Amaranth simulation only.
 - Runnable examples are in [examples/](examples/) (blink on a board LED, UART, two state machines in one block, a WS2812-style waveform, a builder square wave, a unittest of a program in the emulator); the tests run them. `python -m pioweave new NAME` creates a project from a template.
 - The change log is [CHANGELOG.rst](CHANGELOG.rst); version 0.1.0 is not released yet and the licence is not decided (see [docs/releasing.rst](docs/releasing.rst)).
@@ -82,7 +84,7 @@ pioweave is a normal Python package for an environment that has Amaranth:
     pip install git+https://github.com/youprint/pioweave.git     # now, from the repository (private: needs access)
     pip install -e .                                              # from a checkout, for development
 
-`pip` pulls in `amaranth>=0.5,<0.6`. Then `python -m pioweave --version` prints the installed version, `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list`
+`pip` pulls in `amaranth>=0.5.1,<0.6`. Then `python -m pioweave --version` prints the installed version, `python -m pioweave doctor` checks the environment (Amaranth version, optional tools, a smoke test) and `python -m pioweave list`
 shows the example designs. `python -m pioweave new --list` shows the project templates and `python -m pioweave new my-blink` creates a project with a design, a unit test that runs it in the emulator and a `bitweave.toml`.
 With bitweave: `bitweave install pioweave --yes` installs Amaranth and pioweave into `.bitweave-tools` of a project (see [docs/getting-started.rst](docs/getting-started.rst)).
 
@@ -110,7 +112,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 
 ## Layout
 
-    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), compile, data, designs, platform, project, scaffold, doctor, _compat, _gate, _validate
+    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), block, block_cli, block_designs, compile, data, designs, platform, project, scaffold, doctor, __main__ (the command line), _compat, _gate, _validate
     pioweave/builder/      the Python builder (needs no Amaranth)
     pioweave/emulator/     the PIO emulator (needs no Amaranth)
     pioweave/boards/       board definitions
@@ -129,4 +131,4 @@ as a generator, and pioweave's tests use the bitweave binary as the reference si
 
 ## Licence
 
-Proprietary, see [LICENSE](LICENSE) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.
+Proprietary, see [LICENSE.txt](LICENSE.txt) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """The data path of a PIO state machine for designs written in Amaranth: the TX and RX FIFOs and the OSR / ISR shifters (design note docs/design-notes/amaranth-pio.rst).
 
 `platform.shifter(m)` returns a `Shifter`. Its methods add to the current FSM state exactly the register updates that one PIO instruction does, so the Amaranth
@@ -804,7 +804,7 @@ class Shifter:
         m.d.sync += irqm.set_tog[flag].eq(~irqm.set_tog[flag])
 
     def _irq_clear(self, m, flag, rel=False):
-        """`irq clear flag`: lower IRQ flag `flag` (0 to 7) and go on. See `irq_set` for `rel`.
+        """`irq clear flag`: lower IRQ flag `flag` (0 to 7) and go on. See `Shifter._irq_set` for `rel`.
 
         Parameters
         ----------
@@ -822,7 +822,7 @@ class Shifter:
 
     def _irq_wait(self, m, flag, rel=False):
         """`irq wait flag`: raise the flag, then stall until it has been cleared (by the host, or by another state machine). Write
-        ``with sh.irq_wait(m, 3): m.next = ...``; the body runs in the cycle the instruction completes.
+        ``with sh.irq(m, 3, "wait"): m.next = ...``; the body runs in the cycle the instruction completes.
 
         Parameters
         ----------

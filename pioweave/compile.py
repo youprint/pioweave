@@ -1,9 +1,9 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Compile an Amaranth FSM to a PIO program (design note docs/design-notes/amaranth-pio.rst).
 
 A PIO state machine is an FSM whose state is the program counter and that executes one instruction per clock cycle. A design written as one
 Amaranth FSM in which every state does what one PIO instruction does is therefore cycle-equivalent to the compiled program, and the Amaranth
-simulation of the design is the reference (tests/test_pio_compile.py compares it with the bitweave PIO simulator, pin by pin and cycle by
+simulation of the design is the reference (tests/test_compile.py compares it with the bitweave PIO simulator, pin by pin and cycle by
 cycle). The compiler reads the Amaranth 0.5.10 IR (Fragment.statements); anything it cannot map without changing the cycle behaviour is refused
 with the source line, never approximated.
 
@@ -242,7 +242,20 @@ class Compiled:
         Returns
         -------
         dict
-            The configuration, usable as keyword arguments of `pioweave.emulator.run_case`.
+            The configuration, usable as keyword arguments of `pioweave.emulator.run_case` together with ``version=CHIP_VERSION[compiled.chip]``
+            (`pioweave.builder.CHIP_VERSION`: ``run_case`` defaults to PIO version 0, which refuses a ``gpio_base`` of 16 and the RP2350-only keys);
+            `pioweave.emulator.run_compiled` does that for you.
+
+        Examples
+        --------
+        >>> from pioweave import PLATFORMS, compile_design, designs
+        >>> from pioweave.builder import CHIP_VERSION
+        >>> from pioweave.emulator import run_case
+        >>> cls, chip, stim, cycles, opts = designs.entry("high_pins")
+        >>> c = compile_design(cls(), PLATFORMS[chip](), "high_pins")
+        >>> c.sim_config()["gpio_base"]
+        16
+        >>> r = run_case(c.program, 4, version=CHIP_VERSION[c.chip], **c.sim_config())
         """
         c = {}
         if self.set_pin:
@@ -406,6 +419,16 @@ def _norm_cond(part, truth, ctx, loc):
     _fail("this test cannot be done by one PIO instruction (X or Y against 0, X against Y, an input pin)", loc)
 
 
+def _opposite(a, b):
+    """True when test `b` is exactly the negation of test `a` (the two cases of a Switch on one bit): the same pin or register with the opposite truth value."""
+    if a[0] != b[0] or a[0] not in ("pin", "cmp", "osre", "flag", "pinbit"):
+        return False
+    same = lambda x, y: x is y or (isinstance(x, (str, int)) and x == y)       # noqa: E731  (never `==` on Amaranth values: it builds an expression)
+    if a[0] == "cmp":
+        return a[1] != b[1] and all(same(x, y) for x, y in zip(a[2:], b[2:]))
+    return same(a[1], b[1]) and a[3:] == b[3:] and a[2] != b[2]
+
+
 def _case_conds(sw, ctx, loc):
     parts = sw.test.parts if isinstance(sw.test, ast.Concat) else [sw.test]
     if any(len(p) != 1 for p in parts):
@@ -455,6 +478,8 @@ def _exec(stmts, ctx, nxt, effects, loc):
                 default = body
             else:
                 branches.append((cond, body))
+        if default is None and len(branches) == 2 and _opposite(branches[0][0], branches[1][0]):
+            default, branches = branches[1][1], branches[:1]          # Case(1) and Case(0) of one bit: the second case is the else branch of the first
         tree = _exec(list(default) + rest, ctx, nxt, effects, loc) if default is not None else _exec(rest, ctx, nxt, effects, loc)
         for cond, body in reversed(branches):
             tree = Br(cond, _exec(list(body) + rest, ctx, nxt, effects, loc), tree, loc)
@@ -590,7 +615,6 @@ def _split_effects(effects, ctx, loc):
         name = ctx.regname(sig)
         if name is None:
             _fail("signal %r is not a pin from platform.request() or a scratch register from platform.scratch(); it would need PIO storage that does not exist" % sig.name, loc)
-        other = "y" if name == "x" else "x"
         v = _const(rhs, loc)
         if v is not None:
             if not 0 <= v <= 31:
@@ -1077,7 +1101,6 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
             _fail("a state that waits for a pin must continue with the next state", br.loc)
         if treg or ereg:
             _fail("a waiting state cannot change registers", br.loc)
-        gpio = cond[1]
         info = ctx.platform.pin_info(cond[1])
         if len(info.gpios) != 1:
             _fail("wait on a multi-bit input is not supported", br.loc)
@@ -1086,9 +1109,9 @@ def _classify_branch(i, n, br, succ, names, set_pin, side_pin, ctx, jmp_gpios):
         return Op("wait", level=int(level), gpio=info.gpios[0], side=side, targets=[], foldable=True, pure_nop=False)
     # jump on a test
     if tn != succ and en == succ:
-        jump_when, target, other = cond, tn, en
+        jump_when, target = cond, tn
     elif en != succ and tn == succ:
-        jump_when, target, other = _flip(cond), en, tn
+        jump_when, target = _flip(cond), en
     else:
         _fail("a state with a test must continue with the next state on one branch and jump on the other (found branches to %s and %s)" % (names[tn], names[en]), br.loc)
     if treg != ereg:

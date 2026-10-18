@@ -21,7 +21,7 @@ What the tests prove
      - the builder: every instruction form, every error, and that its own encoder equals the real ``pioasm`` on 10,681 words in 351 programs
      - ``pioasm`` for the comparison
    * - ``tests/test_compile.py``
-     - the compiler: the seventeen example designs, 450 random control-flow designs and 340 random data-path designs (autopull / autopush, ifempty / iffull, mov, IRQ flags with host events, wait pin, joined FIFOs, and in about 40 percent of the data-path designs and 30 percent of the others pin directions with a direction register: out / mov / set / side-set pindirs) run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, the IRQ flags after every cycle, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version
+     - the compiler: the seventeen example designs, random control-flow and data-path designs (15 of each kind in a default run; ``PIO_COSIM_N`` sets the number, and the 450 and 340 of the README are the results of separate long runs); the data-path designs use autopull / autopush, ifempty / iffull, mov, IRQ flags with host events, wait pin, joined FIFOs, and in about 40 percent of the data-path designs and 30 percent of the others pin directions with a direction register: out / mov / set / side-set pindirs. Designs run in the Amaranth simulator and in bitweave's PIO simulator and must agree pin by pin and cycle by cycle (and on the words pushed with their cycles, the IRQ flags after every cycle, and the FIFO contents left); directed forms; the instruction words of every example on every Amaranth version
      - the ``bitweave`` binary and ``pioasm``
    * - ``tests/test_emulator.py``, ``tests/test_emulator_datasheet.py``, ``tests/test_emulator_trace.py``, ``tests/test_emulator_parity.py``, ``tests/test_emulator_amaranth.py``, ``tests/test_emulator_differential.py``
      - the emulator: directed tests (facts cited from the datasheets), the ``emulate`` API, behaviours of another emulator worked out fresh, comparison with the Amaranth simulation (no tools) and with bitweave's PIO simulator on random programs and on extra families (EXEC, IRQ, joins, thresholds, pin directions); see :doc:`emulator <emulator>`; a hardware test plan is in :doc:`hardware-testing` (nothing has run on a chip)
@@ -41,14 +41,20 @@ What the tests prove
    * - ``tests/test_block_dirs.py``
      - blocks whose machines use pin directions (``platform.directions``; :doc:`blocks`): an open-drain line with a follower on the RP2040, and a bidirectional bus (``out pindirs``, ``mov pindirs``) with the line and a follower on the RP2350, with fixed and random stimulus; the Amaranth simulation of the block, the emulator and each machine alone must agree on the pads and the directions; ``expect_dirs`` in the generated cases and the final direction lines of ``main.c``; the cases in bitweave (and the SDK build with ``PIO_BUILD_FIRMWARE=1``)
      - the bitweave cases need ``bitweave`` and ``pioasm``; the rest nothing
+   * - ``tests/test_amaranth_datasheet.py``
+     - directed tests of the Amaranth data path with expected values worked out by hand from quoted datasheet sentences (autopush word, ``push iffull`` at the threshold, counter saturation, ``wait 1 irq`` against ``wait 0 irq``, no folding of a jump target): the Amaranth reference simulation alone
+     - nothing
+   * - ``tests/test_packaging.py``
+     - the Documentation URL hook of ``pdm_build.py`` (runs twice when ``python -m build`` builds the wheel from the sdist), the versions of the subpackages, no ``py.typed`` without annotations
+     - nothing
    * - ``tests/test_boards.py``
      - the board pins against the Pico SDK headers and a blink design compiled on each board
      - an SDK checkout for the header comparison
-
-What this does **not** prove: anything about a chip. The simulator and the compiler were written by the same author from the same datasheets, so the co-simulation catches mismatches between the Amaranth semantics and the PIO model, not a misreading of the datasheets common to both (the model was also cross-checked against ``pioasm`` and against the rp2040-pio-emulator in bitweave's own tests). Real timing also depends on the state machine clock and on the pads.
    * - the examples in the documentation
      - ``sphinx-build -W -b doctest docs docs/_build/doctest`` (or ``pdm run test-docs``) runs every ``.. testcode::`` example of the pages and the docstrings and compares the ``.. testoutput::`` listings (the ``.pio`` programs shown) with what the examples write
      - Sphinx and sphinx-rtd-theme (``pdm install -G docs``); no other tool
+
+What this does **not** prove: anything about a chip. The simulator and the compiler were written by the same author from the same datasheets, so the co-simulation catches mismatches between the Amaranth semantics and the PIO model, not a misreading of the datasheets common to both (the model was also cross-checked against ``pioasm`` and against the rp2040-pio-emulator in bitweave's own tests). Real timing also depends on the state machine clock and on the pads. The Amaranth data path was written to match the emulator, so their agreement holds by construction; the independent checks are bitweave's simulator, the directed tests with hand-derived expectations (``tests/test_amaranth_datasheet.py``, ``tests/test_emulator_datasheet.py``) and, once it has been run, the hardware plan.
 
 Environment variables
 ---------------------

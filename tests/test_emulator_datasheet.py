@@ -1,7 +1,7 @@
 """Tests of the emulator facts that were [verify] and are now taken from the datasheets. Every test names the section and the printed page it follows: RP2040 datasheet (build-date
 2025-02-20, build-version 3184e62-clean) and RP2350 datasheet (Release 8, build date 01/10/2026, build version 80d627281ed5). The expected values are worked out from those
 sentences, not from another implementation. Nothing here has run on a chip."""
-from pioweave.builder import (CLEAR, EXEC, NULL, PINDIRS, PINS, SET, STATUS, WAIT, X, Y, Program)
+from pioweave.builder import (CLEAR, EXEC, NULL, PINDIRS, PINS, SET, STATUS, WAIT, X, X_DEC, Y, Program)
 from pioweave.emulator import EmulationError, PioBlock, run_case
 
 from . import support
@@ -34,7 +34,7 @@ class DatasheetTests(support.TestCase):
     # ----------------------------------------------------------------------------- reset values
     def test_reset_values_of_the_configuration(self):
         # RP2040 Table 383 p.377 and RP2350 Table 1053 p.857: OUT_SHIFTDIR = IN_SHIFTDIR = 1 (right), PULL_THRESH = PUSH_THRESH = 0 (= 32), no autopull / autopush, FJOIN 0;
-        # Table 386 p.378 / Table 1056 p.859: SET_COUNT = 5, OUT_COUNT = 0; Table 381 p.376: CLKDIV_INT = 1; Table 376 p.375: INPUT_SYNC_BYPASS = 0 (synchronised)
+        # Table 386 p.378 / Table 1056 p.859: SET_COUNT = 5, OUT_COUNT = 0; Table 381 p.376: CLKDIV_INT = 1; Table 376 p.374: INPUT_SYNC_BYPASS = 0 (synchronised)
         block = PioBlock()
         c = block.sm[0].cfg
         self.assertTrue(c.in_right and c.out_right and not c.autopush and not c.autopull)
@@ -105,7 +105,7 @@ class DatasheetTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- the input synchroniser and the delays of the pin path
     def test_synchroniser_is_two_flops_and_bypassed_per_gpio(self):
-        # RP2040 3.5.6.3 p.342 and INPUT_SYNC_BYPASS Table 376 p.375: "a standard 2-flipflop synchroniser" adds two cycles of latency, engaged by default (0 -> synchronised);
+        # RP2040 3.5.6.3 p.342 and INPUT_SYNC_BYPASS Table 376 p.374: "a standard 2-flipflop synchroniser" adds two cycles of latency, engaged by default (0 -> synchronised);
         # a 1 bit bypasses it for that GPIO
         p = prog()
         p.mov(X, PINS)
@@ -172,7 +172,7 @@ class DatasheetTests(support.TestCase):
         self.assertEqual(sm.tx_dropped, 1)
 
     def test_pushes_stall_with_a_tx_join_and_pulls_with_an_rx_join(self):
-        # RP2040 3.5.3 p.334: joining to TX makes the RX FIFO unavailable and "any PUSH instruction will stall"; joined to RX, the TX FIFO is unavailable
+        # RP2040 3.5.3 p.334-335: joining to TX makes the RX FIFO unavailable and "any PUSH instruction will stall"; joined to RX, the TX FIFO is unavailable
         p = prog()
         p.push()
         r = run_case(p, 5, fifo_join="tx")
@@ -195,7 +195,7 @@ class DatasheetTests(support.TestCase):
         self.assertEqual(len(sm.tx), 1)
 
     def test_rx_get_and_put_registers_on_version_1(self):
-        # RP2350 11.4.8 p.810 / 11.4.9 p.811: the RX FIFO is disabled and its four registers are written with MOV rxfifo[], ISR (PUT) and read with MOV OSR, rxfifo[] (GET), indexed
+        # RP2350 11.4.8 p.809 / 11.4.9 p.810: the RX FIFO is disabled and its four registers are written with MOV rxfifo[], ISR (PUT) and read with MOV OSR, rxfifo[] (GET), indexed
         # by Y or by an immediate; PUSH and PULL-style RX use is undefined; a non-zero Index with IdxI clear is a reserved encoding
         p = prog("rp2350")
         p.fifo("putget")
@@ -214,7 +214,7 @@ class DatasheetTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- MOV STATUS and the IRQ flags
     def test_mov_status_compares_the_fifo_level_with_n(self):
-        # RP2040 Table 382 p.377: TXLEVEL: all-ones if the TX FIFO level < N, otherwise all-zeroes; RXLEVEL likewise for the RX FIFO
+        # RP2040 Table 382 p.376: TXLEVEL: all-ones if the TX FIFO level < N, otherwise all-zeroes; RXLEVEL likewise for the RX FIFO
         p = prog()
         p.mov(X, STATUS)
         for n, words, want in ((2, 1, 0xFFFFFFFF), (2, 2, 0), (1, 0, 0xFFFFFFFF), (0, 0, 0)):
@@ -224,7 +224,7 @@ class DatasheetTests(support.TestCase):
         self.assertEqual(r.x, 0xFFFFFFFF)
 
     def test_mov_status_from_an_irq_flag_on_version_1(self):
-        # RP2350 Table 1052 p.857: STATUS_SEL = IRQ: all-ones if the indexed flag is raised; STATUS_N 0 is this block, 8 the next lower-numbered block, 16 the next higher
+        # RP2350 Table 1052 p.856: STATUS_SEL = IRQ: all-ones if the indexed flag is raised; STATUS_N 0 is this block, 8 the next lower-numbered block, 16 the next higher
         p = prog("rp2350")
         p.irq(3)
         p.mov(X, STATUS)
@@ -253,7 +253,7 @@ class DatasheetTests(support.TestCase):
             PioBlock(version=0).sm[0].configure(status_sel="irq")
 
     def test_irq_set_wins_over_clear_in_the_same_cycle(self):
-        # RP2350 11.2.8 p.799 and 11.4.11 p.814: "when a flag is both set and cleared on the same cycle, the set takes precedence"
+        # RP2350 11.2.8 p.798: "when a flag is both set and cleared on the same cycle, the set takes precedence"
         setter, clearer = prog(), prog()
         setter.irq(1)
         clearer.irq(1, mode=CLEAR)
@@ -334,7 +334,7 @@ class DatasheetTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- EXEC and forced instructions
     def test_out_exec_ignores_its_own_delay_and_the_executee_keeps_its_delay(self):
-        # RP2040 3.4.5.2 p.327: "Delay cycles on the initial OUT are ignored, but the executee may insert delay cycles as normal"; 3.5.7 p.345: the executee comes from a latch
+        # RP2040 3.4.5.2 p.326: "Delay cycles on the initial OUT are ignored, but the executee may insert delay cycles as normal"; 3.5.7 p.344: the executee comes from a latch
         # and the PC does not advance on that second cycle
         setx = word(lambda p: p.set(X, 5, delay=1))
         p = prog()
@@ -357,7 +357,7 @@ class DatasheetTests(support.TestCase):
         self.assertEqual(r.pc, 6)                                                           # the jump went to 5, one more instruction ran (the nop at 5)
 
     def test_forced_instruction_ignores_delay_the_clock_divider_and_the_enable(self):
-        # RP2040 3.5.7 p.344-345: a word written to SMx_INSTR is executed immediately, "delay cycles are ignored ... ignoring the state machine clock divider"; the PC does not
+        # RP2040 3.5.7 p.343-344: a word written to SMx_INSTR is executed immediately, "delay cycles are ignored ... ignoring the state machine clock divider"; the PC does not
         # advance unless the instruction is a jump; the SDK uses this to set up a state machine before enabling it
         forced = word(lambda p: p.set(Y, 7, delay=9))
         p = prog()
@@ -377,7 +377,7 @@ class DatasheetTests(support.TestCase):
         self.assertEqual(sm.pc, 1)
 
     def test_forced_instruction_replaces_the_fetch_in_its_cycle_and_a_stalled_one_is_latched(self):
-        # RP2040 3.5.7 p.344-345: the state machine executes the written instruction "rather than the instruction it would have fetched"; if it stalls it is latched (EXEC_STALLED)
+        # RP2040 3.5.7 p.343-344: the state machine executes the written instruction "rather than the instruction it would have fetched"; if it stalls it is latched (EXEC_STALLED)
         # and retried until it completes, after which the program continues where it left off
         p = prog()
         p.set(X, 1)
@@ -429,3 +429,97 @@ class DatasheetTests(support.TestCase):
         block.run(3)
         self.assertEqual(block.out_level & 1, 1)
         self.assertEqual(sm.sticky, {})
+
+
+@support.cases
+class DatasheetGapTests(support.TestCase):
+    """Directed tests added for the mutation survivors of the audit (COR-43, COR-47). Expected values are worked out from the datasheet sentences quoted in each test."""
+
+    def test_the_program_counter_wraps_only_when_it_equals_wrap_top(self):
+        # RP2040 3.5.2 p.333, step 2: "if PC matches EXECCTRL_WRAP_TOP, set PC to EXECCTRL_WRAP_BOTTOM" (matches = equals): a program that jumps past wrap_top does not wrap.
+        # 0: set x, 1   1: jmp 3 (wrap_top = 1)   2: set x, 9 (skipped)   3: set y, 5   4: set x, 7   5: jmp 5
+        p = prog()
+        p.wrap_target()
+        p.set(X, 1)
+        p.jmp("past")
+        p.wrap()
+        p.set(X, 9)
+        p.label("past")
+        p.set(Y, 5)
+        p.set(X, 7)
+        p.label("hang")
+        p.jmp("hang")
+        r = run_case(p, 12)
+        self.assertEqual((r.x, r.y), (7, 5))                 # a wrap at pc 3 (pc >= wrap_top) would run `set x, 1` again and never reach `set x, 7`
+
+    def test_jmp_x_decrement_also_decrements_when_it_falls_through(self):
+        # RP2040 3.4.2.2: "X--: branch if scratch X non-zero, post-decrement"; the decrement happens whether or not the branch is taken, so X = 0 becomes 0xFFFFFFFF
+        p = prog()
+        p.set(X, 0)
+        p.jmp("never", when=X_DEC)
+        p.label("never")
+        p.set(Y, 3)
+        r = run_case(p, 3)
+        self.assertEqual((r.x, r.y), (0xFFFFFFFF, 3))
+
+    def test_wait_0_irq_does_not_clear_the_flag(self):
+        # RP2040 3.4.9 / RP2350 11.4.9: only "wait 1 irq" clears the flag it waits for; "wait 0 irq" stalls while the flag is up and changes nothing
+        p = prog()
+        p.wait_irq(0, 3)
+        r = run_case(p, 8, on_error="stop")
+        self.assertEqual(r.irq, 0)                         # no flag was ever raised: the wait completes
+        b = PioBlock()
+        sm = b.sm[0]
+        sm.configure(program=b.load(p))
+        sm.enable()
+        b.irq_force(1 << 3)
+        for _ in range(6):
+            b.step()
+        self.assertEqual(b.irq, 1 << 3)                     # still up after six stalled cycles
+
+    def test_autopull_refills_in_the_same_cycle_the_threshold_is_reached(self):
+        # RP2040 3.5.4.2 (autopull): with PULL_THRESH = 8 the OSR is refilled from the TX FIFO as soon as 8 bits have been shifted out, if the FIFO has a word, so the next OUT does not
+        # stall. Cycle 0: the OSR is exhausted (count 32 >= 8), the first OUT stalls while it is refilled (pins still 0). Cycle 1: out pins, 8 -> 0xAA; the count reaches 8 and the
+        # OSR is refilled in the same cycle. Cycle 2: out pins, 8 -> 0x55, without a stall.
+        p = prog()
+        p.out(PINS, 8)
+        r = run_case(p, 3, tx=[0xAA, 0x55], out_base=0, out_count=8, dirs=0xFF, autopull=True, pull_thresh=8)
+        self.assertEqual([x & 0xFF for x in r.pads], [0x00, 0xAA, 0x55])
+
+    def test_autopull_stalls_when_the_count_is_exactly_the_threshold_and_the_fifo_is_empty(self):
+        # the same program with one word only: after the OUT of cycle 1 the OSR holds 0 bits (count 8 = threshold), the FIFO is empty, so the OUT of cycle 2 stalls and the pins keep 0xAA
+        p = prog()
+        p.out(PINS, 8)
+        r = run_case(p, 4, tx=[0xAA], out_base=0, out_count=8, dirs=0xFF, autopull=True, pull_thresh=8)
+        self.assertEqual([x & 0xFF for x in r.pads], [0x00, 0xAA, 0xAA, 0xAA])
+
+    def test_mov_rxfifo_with_idxi_indexes_by_the_two_low_bits_of_index(self):
+        # RP2350 11.4.8.2 p.809: "If IdxI (index by immediate) is set, the RX FIFO's registers are indexed by the two least-significant bits of the Index operand." Encoding
+        # (Table 1027): 100 delay/side-set 0001 IdxI Index. Index 5 = 0b101: register 1.
+        b = PioBlock(version=1)
+        sm = b.sm[0]
+        b.mem[0] = 0x8000 | 0x10 | 0x08 | 5                       # mov rxfifo[5 -> 1], isr
+        sm.configure(fifo_join="rx_put")
+        sm.isr = 0x1234
+        sm.enable()
+        b.step()
+        self.assertEqual(sm.rx_regs, [0, 0x1234, 0, 0])
+
+    def test_mov_rxfifo_index_without_idxi_must_be_zero(self):
+        # the same page: "When IdxI is clear, all non-zero values of Index are reserved encodings, and their operation is undefined" (also Index 4..7)
+        for index in (1, 4, 7):
+            b = PioBlock(version=1)
+            b.mem[0] = 0x8000 | 0x10 | index
+            b.sm[0].configure(fifo_join="rx_put")
+            b.sm[0].enable()
+            with self.assertRaisesRegex(EmulationError, "reserved encoding"):
+                b.step()
+
+    def test_in_count_zero_means_32_pins(self):
+        # RP2350 Table 1053 p.857-858 (SHIFTCTRL IN_COUNT): "A count of 32 is encoded with a field value of 0"; mov x, pins then reads all 32 pins
+        p = prog("rp2350")
+        p.mov(X, PINS)
+        r = run_case(p, 2, version=1, stim={k: "1" for k in range(32)}, in_base=0, in_count=0)
+        self.assertEqual(r.x, 0xFFFFFFFF)
+        r = run_case(p, 2, version=1, stim={k: "1" for k in range(32)}, in_base=0, in_count=8)
+        self.assertEqual(r.x, 0xFF)

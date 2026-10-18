@@ -34,10 +34,12 @@ Supported versions
      - Status (2026-10-17)
    * - 0.5.1, 0.5.10
      - 0.5.10: the whole test suite passes (547 tests with ``PIO_COSIM_N=60``, with real Pico SDK builds); 0.5.1: the default run passes (367 tests, without the SDK builds)
-   * - 0.5.0, 0.5.2 to 0.5.9
-     - the quick suite passes (106 tests plus the instruction words of all fifteen example designs; rerun on 0.5.0; 0.5.2 to 0.5.9 were last run before the autopull, IRQ and ``wait pin`` support)
+   * - 0.5.2 to 0.5.9
+     - the quick suite passes (106 tests plus the instruction words of all fifteen example designs); last run before the autopull, IRQ and ``wait pin`` support
    * - 0.6.0.dev140 (GitHub main, commit ``90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7``)
      - the default run passes (367 tests, without the SDK builds)
+   * - 0.5.0
+     - refused: it has no ``io.SimulationPort``, which the reference simulation needs
    * - any other version
      - refused (see below)
 
@@ -48,7 +50,7 @@ The programs a design compiles to are identical on all of these versions: ``test
 The version gate
 ----------------
 
-``import pioweave`` checks the installed Amaranth against the tested versions and raises ``UnsupportedAmaranth`` with a clear message for anything else (0.4.x, 0.5.11, other 0.6 development versions). It reads the version from the package metadata of the installed ``amaranth`` distribution (``importlib.metadata``, in ``pioweave/_gate.py``), so it does not import Amaranth: ``import pioweave.builder`` and ``import pioweave.emulator`` still load no Amaranth. The modules that use Amaranth (the compiler, the project writers, the blocks; ``pioweave/_compat.py``) check ``amaranth.__version__`` again when they are imported. To try an untested version anyway, set ``PIOWEAVE_ALLOW_UNTESTED=1`` (exactly ``1``); it issues an ``UntestedAmaranthWarning``, so a run with ``-W error`` still stops. ``pip install`` additionally refuses versions outside ``amaranth>=0.5,<0.6`` through the package metadata; to use the development version install Amaranth first and pioweave with ``--no-deps``. ``pioweave.check_version(version, allow=False)`` returns whether a version is accepted.
+``import pioweave`` checks the installed Amaranth against the tested versions and raises ``UnsupportedAmaranth`` with a clear message for anything else (0.4.x, 0.5.11, other 0.6 development versions). It reads the version from the package metadata of the installed ``amaranth`` distribution (``importlib.metadata``, in ``pioweave/_gate.py``), so it does not import Amaranth: ``import pioweave.builder`` and ``import pioweave.emulator`` still load no Amaranth. The modules that use Amaranth (the compiler, the project writers, the blocks; ``pioweave/_compat.py``) check ``amaranth.__version__`` again when they are imported. To try an untested version anyway, set ``PIOWEAVE_ALLOW_UNTESTED=1`` (exactly ``1``); it issues an ``UntestedAmaranthWarning``, so a run with ``-W error`` still stops. ``pip install`` additionally refuses versions outside ``amaranth>=0.5.1,<0.6`` through the package metadata; to use the development version install Amaranth first and pioweave with ``--no-deps``. ``pioweave.check_version(version, allow=False)`` returns whether a version is accepted.
 
 The test matrix
 ---------------
@@ -56,7 +58,7 @@ The test matrix
 ::
 
    scripts/matrix.sh 0.5.1 0.5.10 git:90449f1e6d5abdfb8cac7519ac7b34d83a9f42b7      # the whole suite in a fresh environment per version
-   MATRIX_QUICK=1 scripts/matrix.sh 0.5.0 0.5.2 0.5.3 ...                           # the quick suite
+   MATRIX_QUICK=1 scripts/matrix.sh 0.5.2 0.5.3 0.5.4 ...                           # the quick suite
    PIO_BUILD_FIRMWARE=1 scripts/matrix.sh 0.5.10                                    # also build the generated Pico SDK projects
 
 ``git:COMMIT`` installs Amaranth from its repository at that commit. Run the matrix before a release and whenever Amaranth publishes a new version; add the version to ``_gate.py`` (``TESTED``, ``TESTED_DEV``) when it passes.
@@ -64,6 +66,6 @@ The test matrix
 Standards followed and not followed
 -----------------------------------
 
-Followed: a ``Platform`` subclass per target with ``resources``, ``connectors``, ``required_tools``; ``build()`` with the standard signature; ``amaranth.lib.io.Buffer`` with ``request(..., dir="-")``; ``amaranth.lib.wiring`` components for designs and for the FIFO model; one board module per board; a flat package directory (no ``src/``), ``tests/``, ``docs/`` and ``py.typed``, as ``amaranth-soc`` and ``amaranth-boards`` have; a PEP 621 ``pyproject.toml`` with the ``pdm-backend`` build backend; an Amaranth version range in the metadata.
+Followed: a ``Platform`` subclass per target with ``resources``, ``connectors``, ``required_tools``; ``build()`` with the standard signature; ``amaranth.lib.io.Buffer`` with ``request(..., dir="-")``; ``amaranth.lib.wiring`` components for designs and for the FIFO model; one board module per board; a flat package directory (no ``src/``), ``tests/`` and ``docs/``, as ``amaranth-soc`` and ``amaranth-boards`` have (no ``py.typed``: the code has no type annotations, and amaranth-soc ships no marker either); a PEP 621 ``pyproject.toml`` with the ``pdm-backend`` build backend; an Amaranth version range in the metadata.
 
 Not followed: the compiler uses Amaranth internals (above); the platform's ``build()`` takes ``sim=SimOptions(...)`` and ``project=`` beyond the standard arguments; the package name does not carry the ``amaranth-`` prefix, which would suggest an official Amaranth package.

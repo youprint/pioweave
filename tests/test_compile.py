@@ -1,5 +1,5 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
-"""Tests of platform_rp.py, pio_compile.py and pio_designs.py.
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+"""Tests of pioweave/platform.py, pioweave/compile.py and pioweave/designs.py.
 
 The main test compares the Amaranth simulation of a design with the bitweave PIO simulator running the compiled program, pin by pin and cycle by
 cycle, on the example designs and on random designs of the accepted subset. It is skipped (not passed) when the bitweave binary or pioasm is
@@ -366,9 +366,26 @@ class DataPathTests(support.TestCase):
         c, a, b = run_both("uart_tx")
         self.assertEqual(a["waves"], b["waves"])
         wave = a["waves"][0]
-        # idle high, then the start bit (low for the one cycle of `set x, 7 side 0`), then 0x55 least significant bit first at two cycles per bit (out + jmp)
-        frame = wave[wave.index("0"):][:17]
-        self.assertTrue(frame == "0" + "".join(c * 2 for c in "10101010") and a["tx_left"] == 0)
+        # COR-04: 8N1 at two cycles per bit: idle high, a start bit of TWO cycles, then 0x55 least significant bit first at two cycles per bit (out + jmp)
+        frame = wave[wave.index("0"):][:18]
+        self.assertTrue(frame == "00" + "".join(c * 2 for c in "10101010") and a["tx_left"] == 0, frame)
+
+    @needs_tools
+    def test_uart_tx_frames_decode_as_8n1_at_two_cycles_per_bit(self):
+        # an independent check against the 8N1 definition (start bit low, 8 data bits least significant first, stop bit high), not against the program text
+        c, a, b = run_both("uart_tx")
+        wave, bytes_, i = a["waves"][0], [], 0
+        while "0" in wave[i:]:
+            i += wave[i:].index("0")                            # the falling edge of a start bit
+            if i + 20 > len(wave):
+                break
+            self.assertTrue(wave[i:i + 2] == "00", "start bit lasts two cycles: " + wave[i:i + 6])
+            bits = [int(wave[i + 2 + 2 * k]) for k in range(8)]       # sampled at the first cycle of each bit
+            self.assertEqual([wave[i + 2 + 2 * k + 1] for k in range(8)], [wave[i + 2 + 2 * k] for k in range(8)], "each bit lasts two cycles")
+            self.assertEqual(wave[i + 18:i + 20], "11", "stop bit high for two cycles")
+            bytes_.append(sum(bit << k for k, bit in enumerate(bits)))
+            i += 20
+        self.assertEqual(bytes_, [0x55, 0xC3])
 
     @needs_tools
     def test_uart_rx_receives_the_bytes(self):
@@ -421,8 +438,8 @@ class DataPathTests(support.TestCase):
 
     # ----------------------------------------------------------------------------- the same programs on every Amaranth version
     def test_example_programs_are_the_same_on_every_amaranth_version(self):
-        """python/pioweave/tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
-        The matrix (python/scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently.
+        """tests/example_programs.json holds the instruction words and the simulator configuration of every example design, written with Amaranth 0.5.10.
+        The matrix (scripts/matrix.sh) runs this on the other versions: a different word means the compiler read the design differently.
 
         The file is checked in. After adding or changing an example design, regenerate it with Amaranth 0.5.10 (from the repository root, with ``PYTHONPATH=.``)::
 
@@ -712,3 +729,15 @@ class IrqTests(support.TestCase):
         c, a, b = both_ways(data_design(body, chip="rp2350", status="irq", status_n=6), cycles=30, irq_clear=[(7, 6)])
         self.assertTrue("irq set 6 rel" in c.program.pio_text() and c.sim_config()["status_sel"] == "irq" and c.irq_rel)
         self.assertEqual(a["waves"][0][:4], "0011")           # mov x, status sees flag 6 (raised in the cycle before) and mov pins, x shows its bit 0
+
+
+@support.cases
+class SimConfigTests(support.TestCase):
+    @support.parametrize("name", sorted(pio_designs.PROGRAMS))
+    def test_sim_config_with_the_chip_version_runs_in_the_emulator(self, name):
+        # COR-13: the docstring of Compiled.sim_config promised keyword arguments of run_case; they need the PIO version of the chip (gpio_base 16 needs version 1)
+        from pioweave.builder import CHIP_VERSION
+        from pioweave.emulator import run_case
+        cls, chip, stim, cycles, opts = pio_designs.entry(name)
+        c = compile_factory(lambda: (cls(), PLATFORMS[chip]()), name)
+        run_case(c.program, 5, version=CHIP_VERSION[c.chip], on_error="stop", **c.sim_config())

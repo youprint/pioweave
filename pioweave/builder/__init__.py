@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
 """pioweave.builder: write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 (and their A / B variants) in Python.
 
 No dependencies (importing it does not import Amaranth). See program.py for the builder and docs/builder.rst for the manual. The Amaranth platforms and the
@@ -9,4 +9,4 @@ from .program import (ALWAYS, CHIP_VERSION, CLEAR, EXEC, INVERT, ISR, MEMORY_WOR
 
 __all__ = ["ALWAYS", "CHIP_VERSION", "CLEAR", "EXEC", "INVERT", "ISR", "MEMORY_WORDS", "NONE", "NOT_OSRE", "NOT_X", "NOT_Y", "NULL", "OSR", "PC", "PIN", "PINDIRS",
            "PINS", "REVERSE", "SET", "STATUS", "WAIT", "X", "X_DEC", "X_NE_Y", "Y", "Y_DEC", "PioError", "Program", "write_pio"]
-__version__ = "0.1.0"
+from .. import __version__  # noqa: E402  (from the package metadata, which comes from the git tag)

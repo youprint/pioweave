@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """`python -m pioweave doctor`: what this Python environment can do. Checks the Python and Amaranth versions against the version gate, the three packages, the
 tools that are optional (pioasm, bitweave, cmake, arm-none-eabi-gcc, picotool, the Pico SDK), and compiles one example as a smoke test. Exit code 0 when the
 essentials work (a missing optional tool is a note, not a failure, unless `--strict`)."""
@@ -43,7 +43,7 @@ def report():
         ok = check_version(amaranth.__version__, allow=False)
         rows.append(("ok" if ok else "fail", "amaranth", "%s %s (tested: %s and %s)" % (amaranth.__version__, "accepted" if ok else "NOT tested with this pioweave", TESTED, ", ".join(TESTED_DEV))))
     except ImportError:
-        rows.append(("fail", "amaranth", "not installed (pip install 'amaranth>=0.5,<0.6')"))
+        rows.append(("fail", "amaranth", "not installed (pip install 'amaranth>=0.5.1,<0.6')"))
     try:
         rows.append(("ok", "pioweave", importlib.metadata.version("pioweave")))
     except importlib.metadata.PackageNotFoundError:

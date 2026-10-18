@@ -81,7 +81,7 @@ Autopull and autopush
 
 - An ``out`` finds the OSR *empty* when ``pull_thresh`` bits or more have been shifted out. It then does not execute: that cycle is a stall in which the OSR is refilled if the TX FIFO holds a word; the stall repeats while the FIFO is empty.
 - Otherwise it executes, and in the same cycle, after its shift, the OSR is refilled if the threshold is now reached and the FIFO holds a word, so the next ``out`` does not stall. Every other cycle (delay cycles, stalled cycles, any other instruction) refills too when the threshold is reached and a word is there.
-- An ``in`` shifts once; when the ISR has ``push_thresh`` bits or more the word is pushed and the ISR cleared if the RX FIFO has room, otherwise the ``in`` stalls (and does not shift again) until it has.
+- An ``in`` shifts once; when the ISR has ``push_thresh`` bits or more the word is pushed and the ISR cleared if the RX FIFO has room, otherwise the ``in`` stalls until it has. Whether the retry after such a stall shifts again is not stated in the datasheet (the pseudocode of RP2040 3.5.4.1 p.338 is silent); the model shifts once and retries only the push [verify on a chip, HW-31].
 - A ``pull`` with autopull on does nothing when the OSR has just been refilled (no bits shifted out).
 
 Because these instructions can stall, write them with ``with``; the body (``m.next = ...``) runs in the cycle the instruction completes, and the state stays until then. Assign a side-set value *before* the ``with``, so that it applies while the state waits:
@@ -199,7 +199,7 @@ The examples with a data path in ``pioweave/designs.py`` (``python -m pioweave l
    * - Name
      - What it shows
    * - ``uart_tx``
-     - the Pico SDK transmitter: ``pull block side 1 [1]``, ``set x, 7 side 0``, ``out pins, 1``, ``jmp x--``. Two cycles per bit.
+     - the Pico SDK transmitter with 2 delay cycles instead of 8: ``pull block side 1 [1]``, ``set x, 7 side 0 [1]``, ``out pins, 1``, ``jmp x--``. Two cycles per bit, the start and stop bits included.
    * - ``uart_rx``
      - the receiver: ``wait 0 gpio 4``, ``set x, 7 [10]``, ``in pins, 1 [6]``, ``jmp x--``, ``push block``. Eight cycles per bit; the byte arrives in bits 31..24 of the word.
    * - ``byte_swap``

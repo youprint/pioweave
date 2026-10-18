@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """Several state machines in one design: the block layer (design note docs/design-notes/amaranth-pio.rst, section 2g; user guide docs/blocks.rst).
 
 A PIO block has four state machines that share one 32-word instruction memory, the eight IRQ flags and the GPIOs. A `Block` is a list of `Machine` objects, each one an
@@ -32,7 +32,7 @@ from ._validate import DEFAULT_MAX_CYCLES, check_cycles, check_name, check_stim,
 from .compile import PioCompileError, compile_design
 from .data import IrqModel
 from .platform import RP2040PioPlatform
-from .project import PioProjectError, _c_sm_config, _cmake, _toml_case, check_targets
+from .project import PioProjectError, _c_sm_config, _c_sync_bypass, _cmake, _toml_case, check_targets
 
 __all__ = ["BlockError", "Machine", "Block", "BlockSim", "BlockCompiled", "IrqHub", "IrqPort", "block_run", "emulate_block", "machine_cases", "MAX_MACHINES", "MEMORY_WORDS"]
 
@@ -203,8 +203,12 @@ class BlockSim:
             check_stim(self.stim, BlockError)
             for words in self.tx.values():
                 check_words(words, BlockError, "tx")
-            for feed in self.tx_feed.values():
+            for name, feed in self.tx_feed.items():
                 check_tx_feed(feed, BlockError)
+                cycles = [c for c, _ in feed]
+                for c in cycles:
+                    if cycles.count(c) > 1:
+                        raise BlockError("tx_feed of machine %s has two words in cycle %d; the reference simulation applies one host write per cycle\n  hint: move one of the words to another cycle" % (name, c))
         except (TypeError, AttributeError) as e:
             raise BlockError("invalid simulation option: %s" % e) from None
 
@@ -904,6 +908,7 @@ def _c_block_main(bc, name, sim):
     lines.append("    PIO pio = pio0;")
     if bc.gpio_base:
         lines.append("    pio_set_gpio_base(pio, %d);     // the programs use GPIO %d to %d; the SDK pin numbers below are real GPIO numbers" % (bc.gpio_base, bc.gpio_base, bc.gpio_base + 31))
+    lines += _c_sync_bypass(bc.compiled)
     for k, (mname, c, off) in enumerate(zip(bc.names, bc.compiled, bc.offsets)):
         lines += ["    {   // state machine %d: %s (%d instructions at offset %d)" % (k, mname, len(c.program.words()), off),
                   "        uint sm = %d;" % k, "        pio_sm_claim(pio, sm);", "        uint offset = %d;" % off, "        pio_add_program_at_offset(pio, &%s_program, offset);" % c.program.name]

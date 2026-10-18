@@ -143,6 +143,11 @@ def random_case(seed, family=None):
         cfg["fifo_join"] = join if family == "fifo" else r.choice(["none", "none", "tx", "rx"])
     cfg["status_sel"] = r.choice(["tx", "rx"] + (["irq"] if chip != "rp2040" else []))
     cfg["status_n"] = r.randint(0, 7)
+    if chip != "rp2040" and cfg["status_sel"] != "irq":
+        # RP2350: a level above the FIFO depth is reserved (bitweave refuses it); the depth is 4, 8 when the other FIFO is joined to it, 0 when it is joined away
+        join = cfg["fifo_join"]
+        depth = {"tx": (8, 0), "rx": (0, 8)}.get(join, (4, 0) if join.startswith("rx_") else (4, 4))[0 if cfg["status_sel"] == "tx" else 1]
+        cfg["status_n"] = min(cfg["status_n"], depth)
     cycles = r.randint(30, 120)
     stim = {pin: "".join(r.choice("01") for _ in range(r.randint(5, 30))) for pin in r.sample(range(32), r.randint(0, 6))}
     count = r.randint(4, 8) if family in ("thresholds", "fifo", "exec") else r.randint(0, 5)

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE)
+# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
 """The only place that touches Amaranth's internals, and the second half of the version gate (the first half, `pioweave._gate`, runs when ``pioweave`` is imported) (study: docs/design-notes/amaranth-ir-study.rst).
 
 What the compiler needs from Amaranth, and where it comes from:
@@ -6,8 +6,8 @@ What the compiler needs from Amaranth, and where it comes from:
   Assign, Switch, Operator, Concat, Slice  the private module `amaranth.hdl._ast` (not exported by `amaranth.hdl`; Slice is read for `wait pin`: `.value`, `.start`, `.stop`)
   the names of the states of an FSM `fsm_state_names()` below: `Signal.decoder` (0.5.x) or the signal's format object (0.6 development versions)
 
-Versions (python/scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
-no pre-release and the newest tag is v0.6.0.dev0); the quick suite (refusals, builder, boards, the instruction words of every example) passes on every 0.5.x from 0.5.0 to 0.5.10. Those
+Versions (scripts/matrix.sh, 2026-10-17): the whole test suite passes on 0.5.1, 0.5.10 and the 0.6 development version in TESTED_DEV (there is no 0.6 beta release yet: PyPI has
+no pre-release and the newest tag is v0.6.0.dev0); the quick suite (refusals, builder, boards, the instruction words of every example) passes on every 0.5.x from 0.5.1 to 0.5.10 (0.5.0 is not supported: it has no ``io.SimulationPort``, which the reference simulation needs). Those
 are accepted; any other version is refused with a clear message unless PIOWEAVE_ALLOW_UNTESTED=1 is set.
 """
 import amaranth
@@ -49,7 +49,7 @@ def check_version(version=None, allow=None):
     >>> check_version("0.4.0", allow=False)  # doctest: +ELLIPSIS
     Traceback (most recent call last):
       ...
-    pioweave._gate.UnsupportedAmaranth: pioweave was tested with Amaranth 0.5.0 to 0.5.10 and ...; found 0.4.0. ...
+    pioweave._gate.UnsupportedAmaranth: pioweave was tested with Amaranth 0.5.1 to 0.5.10 and ...; found 0.4.0. ...
     """
     return _gate.check_version(amaranth.__version__ if version is None else version, allow)
 
