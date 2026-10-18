@@ -164,9 +164,10 @@ def check_case(programs, case, max_cycles=DEFAULT_MAX_CYCLES):
     >>> check_case(programs, {"cycles": 8, "dirs": 1, "colour": "red", "expect": {"0": "1"}})["unsupported"]
     ['colour']
     """
+    if isinstance(case, dict):
+        case = {k: v for k, v in case.items() if v is not None}
     if not isinstance(case, dict) or "cycles" not in case:
         raise ValueError("the case needs a `cycles` key")
-    case = {k: v for k, v in case.items() if v is not None}
     unsupported = sorted(k for k in case if k not in SIMULATION_KEYS and k not in EXPECTATION_KEYS)
     prog = _program(programs, case.get("program"))
     try:

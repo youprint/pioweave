@@ -81,8 +81,10 @@ def _emulate(a):
     from .emulator import run_compiled, to_vcd
     cls, chip, stim, cycles, name, opts = _resolve(argparse.Namespace(design=a.design, name=None, chip=a.chip, stim=a.stim, cycles=a.cycles, max_cycles=a.max_cycles, tx=a.tx,
                                                                       tx_feed=a.tx_feed, no_drain=a.no_drain))
+    if a.vcd and cycles > VCD_MAX_CYCLES:
+        raise UsageError("--vcd records every cycle (about 3 kB each): %d cycles is over the limit of %d\n  hint: use --cycles %d or fewer" % (cycles, VCD_MAX_CYCLES, VCD_MAX_CYCLES))
     compiled = compile_design(_make(cls), PLATFORMS[chip](), name)
-    res = run_compiled(compiled, cycles, stim, opts.get("tx", ()), opts.get("tx_feed", ()), opts.get("drain", True))
+    res = run_compiled(compiled, cycles, stim, opts.get("tx", ()), opts.get("tx_feed", ()), opts.get("drain", True), record=bool(a.vcd))
     print(compiled.program.pio_text())
     for g in compiled.output_gpios:
         print("GPIO %-3d %s" % (g, res.wave(compiled.pin(g))))
@@ -95,9 +97,8 @@ def _emulate(a):
         if res.rx_left:
             print("left in the RX FIFO: %s" % ", ".join("0x%08x" % w for w in res.rx_left))
     if a.vcd:
-        rec = run_compiled(compiled, cycles, stim, opts.get("tx", ()), opts.get("tx_feed", ()), opts.get("drain", True), record=True)
         with open(a.vcd, "w") as fh:
-            fh.write(to_vcd(rec.trace, [compiled.pin(g) for g in compiled.output_gpios]))
+            fh.write(to_vcd(res.trace, [compiled.pin(g) for g in compiled.output_gpios]))
         print("wrote %s" % a.vcd)
     return 0
 
@@ -126,7 +127,18 @@ def _new(a):
 
 
 # What is a mistake of the user (or of the design they wrote) and not a bug of pioweave: printed as `error: ...`, exit status 2. PIOWEAVE_TRACEBACK=1 shows the traceback instead.
+VCD_MAX_CYCLES = 100_000       # the trace of a run takes about 2.8 kB per cycle (measured: 2.8 GB for 1,000,000 cycles)
+
 _USER_ERRORS = (PioProjectError, PioCompileError, EmulationError, ScaffoldError, UsageError, ValueError, KeyError, OSError, ImportError, AttributeError, TypeError, RecursionError, OverflowError, EOFError)
+
+
+def _resource_errors():
+    """Amaranth's `ResourceError` (a design asks the platform for a pin the chip does not have) as a tuple; empty when Amaranth is not installed."""
+    try:
+        from amaranth.build.res import ResourceError
+    except ImportError:
+        return ()
+    return (ResourceError,)
 
 
 def _version():
@@ -180,8 +192,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         return _dispatch(a)
-    except _USER_ERRORS as e:
-        if os.environ.get("PIOWEAVE_TRACEBACK") == "1":
+    except Exception as e:
+        if not isinstance(e, _USER_ERRORS + _resource_errors()) or os.environ.get("PIOWEAVE_TRACEBACK") == "1":
             raise
         text = e.args[0] if isinstance(e, KeyError) and e.args else e
         print("error: %s" % (text,), file=sys.stderr)

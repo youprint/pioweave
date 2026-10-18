@@ -142,21 +142,35 @@ def run_case(program, cycles, version=None, stim=None, tx=(), tx_feed=(), drain=
     for pin, w in (stim or {}).items():
         if not isinstance(pin, int) or not 0 <= pin <= 31 or not isinstance(w, str) or not w or w.strip("01"):
             raise ValueError("stim is {pin: waveform} with a pin from 0 to 31 and a non-empty string of 0 and 1, not %r: %r" % (pin, w))
+    if on_error not in ("raise", "stop"):
+        raise ValueError('on_error is "raise" or "stop", not %r' % (on_error,))
+    for key in ("x", "y", "dirs", "start_pc"):
+        v = config.get(key, 0)
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("%s is a whole number, not %r" % (key, v))
     side = config.pop("side", None)
     if version is None:
         version = getattr(program, "version", 0)
     block = PioBlock(version=version, gpio_base=gpio_base, sync_cycles=sync_cycles)
-    loaded = block.load(program, side=side)
+    try:
+        loaded = block.load(program, side=side)
+    except (TypeError, IndexError) as e:
+        raise ValueError("invalid program or side-set argument: %s" % e) from None
     sm = block.sm[0]
     if "sideset_base" in config:
         config["side_base"] = config.pop("sideset_base")
     x, y, dirs, start = config.pop("x", 0), config.pop("y", 0), config.pop("dirs", 0), config.pop("start_pc", 0)
-    sm.configure(program=loaded, **config)
+    try:
+        sm.configure(program=loaded, **config)
+    except TypeError as e:
+        raise ValueError("invalid state machine configuration: %s" % e) from None
     sm.enable()
     sm.set_pc(loaded.offset + start)
     sm.x, sm.y = x, y
     block.dirs = dirs & 0xFFFFFFFF
     for w in tx:
+        if isinstance(w, bool) or not isinstance(w, int):
+            raise ValueError("tx holds 32-bit whole numbers, not %r" % (w,))
         sm.put(w)
     feeds = sorted(tx_feed)
     block.recording = record

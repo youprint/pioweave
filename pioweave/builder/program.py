@@ -1093,5 +1093,6 @@ def write_pio(programs, path):
     PioError
         If a program is inconsistent (see `Program.pio_text`).
     """
+    text = "\n".join(p.pio_text() for p in programs)      # before the file is opened: an inconsistent program must not empty an existing file
     with open(path, "w") as fh:
-        fh.write("\n".join(p.pio_text() for p in programs))
+        fh.write(text)

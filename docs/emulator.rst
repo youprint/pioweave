@@ -193,7 +193,7 @@ From the command line
 
    python -m pioweave emulate uart_tx [--chip CHIP] [--cycles N] [--max-cycles N] [--stim GPIO=0101...] [--tx W,W] [--tx-feed CYCLE=WORD] [--no-drain] [--vcd FILE]
 
-compiles an example design (or ``module:Class``), runs it in the emulator and prints the program, the output pin waveforms, the words received and, with ``--vcd``, writes a waveform file.
+compiles an example design (or ``module:Class``), runs it in the emulator and prints the program, the output pin waveforms, the words received and, with ``--vcd``, writes a waveform file. A traced run keeps about 2.8 kB per cycle in memory (2.8 GB for 1,000,000 cycles, measured 2026-10-18), so ``--vcd`` refuses more than 100,000 cycles.
 
 Checking a bitweave case
 ------------------------

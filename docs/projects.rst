@@ -76,7 +76,7 @@ The command line
 ::
 
    python -m pioweave list                                          # the example designs and their chips
-   python -m pioweave doctor [--strict]                             # check this environment
+   python -m pioweave doctor [--strict]                             # check this environment; exit status 1 when an essential check fails (with --strict, also when an optional tool is missing)
    python -m pioweave build DESIGN OUTDIR [options]
    python -m pioweave emulate DESIGN [options]                      # run a design in the emulator (see the emulator page)
    python -m pioweave new NAME [--template T] / new --list          # scaffold a project (see getting started)
