@@ -426,7 +426,7 @@ class ChipStartStateTests(support.TestCase):
         self.assertNotIn("input_sync_bypass", read(build(self.tmp_path, "square_wave", "pico-c") / "main.c"))
 
     def test_micropython_zeroes_the_registers_then_restarts(self):
-        if PIOASM is None:
+        if find_pioasm() is None:               # the project writer's own search (PIOASM, PATH, next to the interpreter), not the tests' wider one
             self.skipTest("pioasm not found (set PIOASM)")
         main = read(build(self.tmp_path, "uart_tx", "micropython") / "main.py")
         for line in ('sm.exec("set(x, 0)")', 'sm.exec("set(y, 0)")', 'sm.exec("mov(isr, null)")', 'sm.exec("mov(osr, null)")', "sm.restart()"):
