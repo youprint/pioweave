@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Several state machines in one design: the block layer (design note docs/design-notes/amaranth-pio.rst, section 2g; user guide docs/blocks.rst).
 
 A PIO block has four state machines that share one 32-word instruction memory, the eight IRQ flags and the GPIOs. A `Block` is a list of `Machine` objects, each one an

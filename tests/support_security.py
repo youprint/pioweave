@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Helpers of the security regression tests (tests/test_security_*.py): the command line in process, a Python subprocess with this tree on the path."""
 import contextlib
 import io

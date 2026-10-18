@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python (design note docs/design-notes/pio-dsl.rst).
 
 A `Program` is built with one method per PIO instruction, in the style of an Amaranth description: statements in program order, names as

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Example blocks with several state machines (docs/blocks.rst): each machine is an ordinary single-machine design, the machines handshake through the shared IRQ flags.
 
 - ``uart_baud``: a baud tick generator (state machine 0) and a UART transmitter (state machine 1) that waits for the tick before every bit

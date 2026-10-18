@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """The Amaranth version gate, without importing Amaranth (so `import pioweave` can run it, and `import pioweave.builder` still does not load Amaranth).
 
 `pioweave/__init__.py` calls `check_installed` when the package is imported: it reads the version of the installed ``amaranth`` distribution from its metadata

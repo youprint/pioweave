@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Tests of program.py and examples.py.
 
 The main check: the DSL encodes every instruction form itself, from the datasheet tables, and the real pioasm assembles the text the DSL

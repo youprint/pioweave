@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Regression tests of the fuzzing round of 2026-10-18 (findings F1 to F5): a null cycle count, a pin the chip does not have, the size of a VCD run, a failed write_pio that emptied the file, wrong types in run_case."""
 import os
 

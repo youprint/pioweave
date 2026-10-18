@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 from pioweave import RP2040PioPlatform
 
 from .resources import sdk_resources

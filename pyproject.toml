@@ -17,12 +17,11 @@ name = "pioweave"
 description = "Write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 in Python or Amaranth, emulate them, and generate projects: builder, platforms and compiler, emulator, board definitions"
 readme = "README.md"
 requires-python = "~=3.9"
-license = "LicenseRef-Proprietary"
+license = "MIT"
 license-files = ["LICENSE.txt"]
-authors = [{ name = "the project owner" }]
+authors = [{ name = "youprint" }]
 keywords = ["amaranth", "pio", "pioasm", "rp2040", "rp2350", "raspberry-pi", "boards", "emulator"]
 classifiers = [
-    "Private :: Do Not Upload",     # PyPI refuses an upload with this classifier: the licence is proprietary (docs/releasing.rst)
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",

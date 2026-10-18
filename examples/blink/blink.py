@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """Blink the user LED of a board, written as an Amaranth FSM.
 
     python examples/blink/blink.py [--board pico|pico2|weact|waveshare] [--out DIR]

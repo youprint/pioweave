@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """An emulator for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354, in Python.
 
 One `PioBlock` has a shared 32-word instruction memory, four state machines, the eight IRQ flags and the GPIO side of the block (levels, directions, inputs). It executes

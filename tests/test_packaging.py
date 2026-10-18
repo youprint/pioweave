@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """The build hook pdm_build.py (COR-14): the Documentation URL in the package metadata. `python -m build` builds the wheel from the sdist, so the hook runs a second time on
 metadata that already has the URL; it must not add the version again (the wheel said ".../tree/main/docsmain/docs"). pdm-backend is not needed: the hook's one import is stubbed."""
 import importlib.util

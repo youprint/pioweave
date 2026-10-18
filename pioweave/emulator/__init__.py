@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """An emulator for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 (docs/emulator.rst): `PioBlock` with four state machines, the shared instruction memory, the IRQ
 flags and the pins; `run_case` runs one state machine on a test case; `run_compiled` runs a program compiled from an Amaranth design; `emulate` yields ``(before, after)`` state
 snapshots for unit tests, with `count_cycles`, `pin_history`, `waveform_text` and `plot_waveform` built on it. Needs no Amaranth."""

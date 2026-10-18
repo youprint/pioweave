@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Input checks shared by the command line, the project writers and the block writers. No Amaranth is imported, so the builder may use it.
 
 Every check raises an explicit exception (never an ``assert``, which ``python -O`` removes). The functions take the exception class to raise, so each entry point keeps its own

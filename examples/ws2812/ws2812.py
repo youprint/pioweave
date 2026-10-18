@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """A WS2812-style serial LED waveform, written with the Python builder (pioweave.builder).
 
     python examples/ws2812/ws2812.py [--out DIR]

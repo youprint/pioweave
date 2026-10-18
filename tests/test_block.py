@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Blocks with several state machines (pioweave/block.py): the example blocks, the semantics of the shared IRQ flags and pins, the instruction memory, the project files, the
 command line, and the generated cases in bitweave's simulator (when the tools are found). The refusals are in tests/test_refusals.py, the random blocks in
 tests/test_block_cosim.py. Nothing runs on a chip."""

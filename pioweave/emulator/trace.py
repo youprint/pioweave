@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """A generator-based API for unit tests and for looking at a program run: `emulate` yields a ``(before, after)`` pair of frozen `State` snapshots for every system clock cycle
 or every executed instruction of one state machine, and a few conveniences are built on it: `count_cycles`, `pin_history`, `waveform_text` and `plot_waveform`.
 

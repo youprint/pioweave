@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Regression tests of the security audit, the version gate and pathological designs (S-11 to S-14): the gate at import, the override warning, scripts/matrix.sh, designs the compiler must refuse with PioCompileError."""
 import os
 import subprocess

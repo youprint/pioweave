@@ -76,7 +76,7 @@ One module per board (``pico``, ``pico2``, ...) defining a platform class with t
 P4: keep it inside the bitweave repository, install by path (recommended with P2)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``pip install -e <bitweave>/python`` into any environment (bitweave's own ``.tools`` environment already has Amaranth 0.5.10). No publication. bitweave's ``install`` command could get a component that runs this install (a local path package is not on PyPI, so it is a deliberate addition to the catalogue [confirm]). The licence is proprietary (LICENSE), so publishing to PyPI is not planned and would need the owner's decision.
+``pip install -e <bitweave>/python`` into any environment (bitweave's own ``.tools`` environment already has Amaranth 0.5.10). No publication. bitweave's ``install`` command could get a component that runs this install (a local path package is not on PyPI, so it is a deliberate addition to the catalogue [confirm]). The licence is MIT (LICENSE); publishing to PyPI is not planned and would need the owner's decision.
 
 P5: contribute it to Amaranth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """The only place that touches Amaranth's internals, and the second half of the version gate (the first half, `pioweave._gate`, runs when ``pioweave`` is imported) (study: docs/design-notes/amaranth-ir-study.rst).
 
 What the compiler needs from Amaranth, and where it comes from:

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """Unit tests of a PIO program in the emulator, with cycle counts.
 
     python -m unittest examples/emulator_test/test_pulse.py -v        (from the repository root)

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """A second opinion on a bitweave PIO simulation case: ``python -m pioweave.emulator.check [--max-cycles N] [--max-bytes N] PROGRAM_JSON CASE_JSON``.
 
 `PROGRAM_JSON` is the file ``pioasm -o json`` writes. `CASE_JSON` is one simulation case of bitweave (a ``[[pio.NAME.sim]]`` table of bitweave.toml as a JSON object, the keys of

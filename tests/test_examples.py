@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """The runnable examples in examples/ run, so that they cannot rot: each script is executed in a fresh Python process with the current directory and the output directory
 in a temporary directory; the unittest example is run with `python -m unittest`."""
 import os

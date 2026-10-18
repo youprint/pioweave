@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """What the Amaranth-to-PIO compiler refuses, and why each design below is outside the subset because mapping it would change its cycle
 behaviour or needs hardware PIO does not have. Every refusal must name the reason; none may be approximated."""
 import os

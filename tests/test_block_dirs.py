@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Blocks whose machines use pin directions (design notes 2f and 2g): the directions are per GPIO, a pad is the writer's level where the GPIO is an output and the stimulus
 where it is an input. The Amaranth simulation of the whole block, the emulator running the compiled programs together and each machine alone in the emulator must agree on
 the pads, the directions and the views; the project files carry ``expect_dirs`` and the direction of every driven GPIO is set again at the end of ``main.c``. Nothing runs

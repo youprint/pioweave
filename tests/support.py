@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Helpers shared by the tests: a TestCase with a temporary directory, and parametrized tests that are generated as one method per case, so that a failure names the case."""
 import itertools
 import functools

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """A UART transmitter and a UART receiver (8N1, 8 state machine cycles per bit) as Amaranth FSMs, tested against each other in the emulator.
 
     python examples/uart/uart.py [--out DIR]

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Project scaffolding for ``python -m pioweave new NAME``: a directory with a design module, a unittest file that compiles it and runs it in the emulator, a README.md and a
 ``bitweave.toml`` with a ``[pio.NAME]`` entry.
 

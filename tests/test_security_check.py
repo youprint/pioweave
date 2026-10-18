@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Regression tests of the security audit, the emulator (S-09, S-10, S-16): emulator.check on malformed or oversized input, the range checks of the emulator API."""
 import os
 import subprocess

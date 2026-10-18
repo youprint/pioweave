@@ -25,6 +25,11 @@ Added
 - Packaging: the classifier ``Private :: Do Not Upload``, ``PDM_BUILD_SCM_VERSION`` or the placeholder ``0.0.0.dev0+nogit`` for a build without git, ``pdm-backend<3``, no private pdm-backend import; the CI workflow reads only, pins its actions by commit and runs Python 3.14 too.
 - Documentation in reStructuredText (Sphinx, with the examples run by ``sphinx-build -b doctest``): getting started, designing for PIO, the data path, the builder, the emulator, boards, projects, compatibility, testing, examples, releasing, the API reference and the design notes.
 
+Changed
+-------
+
+- The licence is MIT (decided 2026-10-18): ``LICENSE.txt``, ``license = "MIT"`` in ``pyproject.toml``, the copyright line in every source file. The ``Private :: Do Not Upload`` classifier is removed.
+
 Fixed
 -----
 

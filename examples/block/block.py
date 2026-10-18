@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """Two state machines in one PIO block: a baud generator and a UART transmitter that waits for the generator's tick before every bit.
 
     python examples/block/block.py [--out DIR]

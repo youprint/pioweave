@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """Run one state machine of a PIO block on a test case, with the conventions of bitweave's PIO simulator and of the Amaranth reference simulation in pioweave:
 
   - input waveforms are strings of 0 and 1, one character per cycle, the last character repeats; they drive the pins the block does not drive itself;

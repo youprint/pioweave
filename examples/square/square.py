@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """A square wave generator driven from the builder: choose the high and the low time in state machine cycles.
 
     python examples/square/square.py [--high N] [--low N] [--chip rp2040|rp2350] [--out DIR]

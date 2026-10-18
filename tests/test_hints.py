@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """The `hint:` lines appended to the most common error messages: every hint follows the original text, which stays as it was (other tests match it)."""
 from amaranth.hdl import Elaboratable, Module
 

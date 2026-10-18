@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../../LICENSE.txt)
 """pioweave.builder: write PIO programs for the Raspberry Pi RP2040, RP2350 and RP2354 (and their A / B variants) in Python.
 
 No dependencies (importing it does not import Amaranth). See program.py for the builder and docs/builder.rst for the manual. The Amaranth platforms and the

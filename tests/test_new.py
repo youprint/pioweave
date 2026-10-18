@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """`python -m pioweave new` and `--version`: the scaffolded projects exist, and their own tests pass in a fresh process."""
 import contextlib
 import io

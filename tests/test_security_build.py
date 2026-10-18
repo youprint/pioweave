@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Regression tests of the security audit, builder, workflow and packaging (S-15, S-18, S-20)."""
 import os
 import subprocess
@@ -80,8 +80,11 @@ class PackagingTests(support.TestCase):
         with open(os.path.join(ROOT, name)) as fh:
             return fh.read()
 
-    def test_the_package_cannot_be_uploaded_by_accident(self):
-        self.assertIn('"Private :: Do Not Upload"', self.read("pyproject.toml"))
+    def test_the_licence_is_mit_in_the_metadata_and_the_file(self):
+        text = self.read("pyproject.toml")
+        self.assertIn('license = "MIT"', text)
+        self.assertIn('license-files = ["LICENSE.txt"]', text)
+        self.assertNotIn("Private :: Do Not Upload", text)       # decided 2026-10-18: MIT, so an index may accept the package
 
     def test_the_backend_is_bounded_and_has_a_fallback_version(self):
         text = self.read("pyproject.toml")
@@ -91,8 +94,11 @@ class PackagingTests(support.TestCase):
     def test_the_build_hook_uses_no_private_import(self):
         self.assertNotIn("_vendor", self.read("pdm_build.py"))
 
-    def test_the_license_placeholder_note_is_kept(self):
-        self.assertIn("[confirm", self.read("LICENSE.txt"))
+    def test_the_licence_file_is_the_mit_text(self):
+        text = self.read("LICENSE.txt")
+        self.assertTrue(text.startswith("MIT License\n\nCopyright (c) 2026 youprint\n"), text[:80])
+        self.assertIn("Permission is hereby granted, free of charge", text)
+        self.assertNotIn("[confirm", text)
 
     def build(self, **env):
         import importlib.util

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Random block designs for the co-simulation tests: two to four small machines that handshake through the shared IRQ flags, write the same GPIOs (set pins, so
 the highest-numbered machine wins) and read each other's output pins. A spec is a plain dict so that a failing seed can be printed and replayed.
 

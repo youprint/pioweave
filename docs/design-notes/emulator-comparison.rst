@@ -193,4 +193,4 @@ Reading the datasheets for this comparison found real gaps in the emulator, fixe
 6. Licensing note
 -----------------
 
-rp2040-pio-emulator is Apache-2.0 and pioweave is proprietary. No code, test or text of the other project is in this repository; the comparison states its documented behaviour in the words of this note. If a future change wants to import its tests, the Apache-2.0 notice and attribution requirements would apply first.
+rp2040-pio-emulator is Apache-2.0 and pioweave is MIT. No code, test or text of the other project is in this repository; the comparison states its documented behaviour in the words of this note. If a future change wants to import its tests, the Apache-2.0 notice and attribution requirements would apply first.

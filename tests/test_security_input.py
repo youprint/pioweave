@@ -1,4 +1,4 @@
-# Copyright (c) 2026 the project owner. All rights reserved. Proprietary. (see ../LICENSE.txt)
+# Copyright (c) 2026 youprint. MIT licence (see ../LICENSE.txt)
 """Regression tests of the security audit, input handling (S-01 to S-08, S-10, S-05, S-17): names, injection into the generated files, clean command line errors and exit status 2, limits, symbolic links, pioasm failures."""
 import os
 import subprocess

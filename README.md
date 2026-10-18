@@ -73,7 +73,7 @@ Early (version 0.1.0). Everything below was checked in simulation and against th
 - The whole test suite passes on Amaranth 0.5.10 (904 tests, 1 skipped, with `PIO_COSIM_N=40` random designs of each kind; run 2026-10-17 on the merge of the pin direction support and the block layer), including real Pico SDK builds of the generated C projects; before the block layer was added its default run (367 tests, without the SDK builds) also passed on 0.5.1 and the 0.6 development version 0.6.0.dev140, and the quick suite on 0.5.1 and 0.6.0.dev140 (0.5.0 is not supported: it has no `io.SimulationPort`) (0.5.2 to 0.5.9 were last run before the autopull, IRQ and `wait pin` support was added); the pin direction and block tests have not been run on the other versions.
 - Several state machines in one design (`pioweave.block`, [docs/blocks.rst](docs/blocks.rst)): single-machine designs run as state machines 0 to 3 of one block with shared IRQ flags and pins, one program memory (at most 32 instructions in all) and one project (a `.pio` file with a program per machine, a `bitweave.toml` with one case per machine, a Pico SDK `main.c` that starts the machines together). The four example blocks and 1,000 random blocks of two to four machines agree between the Amaranth simulation of the whole block and the emulator, cycle by cycle; bitweave's simulator runs one machine per case, so the combined behaviour is checked against the emulator and the Amaranth simulation only.
 - Runnable examples are in [examples/](examples/) (blink on a board LED, UART, two state machines in one block, a WS2812-style waveform, a builder square wave, a unittest of a program in the emulator); the tests run them. `python -m pioweave new NAME` creates a project from a template.
-- The change log is [CHANGELOG.rst](CHANGELOG.rst); version 0.1.0 is not released yet and the licence is not decided (see [docs/releasing.rst](docs/releasing.rst)).
+- The change log is [CHANGELOG.rst](CHANGELOG.rst); version 0.1.0 is not released yet; the licence is MIT (see [docs/releasing.rst](docs/releasing.rst)).
 - Not built yet in the Amaranth front end: `out` / `mov` to `pc` and `exec` (refused with the reason: a computed jump or an executed data word is not an FSM state; pin directions are modelled, `platform.directions`), `irq prev` / `next` and the RP2350 joins that turn the RX FIFO into registers (the Python builder has all instructions). Not built for blocks: the same program on several machines, `rel`, clock dividers that differ between machines.
 
 ## Install
@@ -107,7 +107,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 | [docs/projects.rst](docs/projects.rst) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
 | [docs/compatibility.rst](docs/compatibility.rst) | supported Amaranth versions, the version gate, the test matrix |
 | [docs/testing.rst](docs/testing.rst) | running the tests, co-simulation, environment variables |
-| [docs/releasing.rst](docs/releasing.rst) | tagging, building the wheel and sdist, what to run before a release, the open licence decision |
+| [docs/releasing.rst](docs/releasing.rst) | tagging, building the wheel and sdist, what to run before a release, the licence |
 | [docs/design-notes/](docs/design-notes/README.rst) | the design notes the code was written from |
 
 ## Layout
@@ -131,4 +131,4 @@ as a generator, and pioweave's tests use the bitweave binary as the reference si
 
 ## Licence
 
-Proprietary, see [LICENSE.txt](LICENSE.txt) [confirm the wording]. No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.
+MIT, see [LICENSE.txt](LICENSE.txt). No third-party code is copied; the instruction encodings come from the RP2040 and RP2350 datasheets.

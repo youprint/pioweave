@@ -1,6 +1,6 @@
 CONTRIBUTIONS and CODE REVIEWS
 
-pioweave is a private, proprietary project of its owner. It is developed in the open style of the Amaranth packages (a flat package directory, tests/, docs/, a pyproject.toml)
+pioweave is an MIT-licensed project of its owner (the repository is private for now). It is developed in the open style of the Amaranth packages (a flat package directory, tests/, docs/, a pyproject.toml)
 so that it can be installed and used like them, but contributions are accepted only from the owner for now.
 
 
