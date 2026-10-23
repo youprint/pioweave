@@ -4,6 +4,7 @@
     python -m pioweave list
     python -m pioweave doctor [--strict]
     python -m pioweave new NAME [--template TEMPLATE] [--dir PARENT]      (new --list shows the templates)
+    python -m pioweave clock (--target HZ | --bitrate BPS --cycles-per-bit N) [--sys HZ] [--chip CHIP] [--max-error-ppm PPM]
     python -m pioweave --version
     python -m pioweave build DESIGN OUTDIR [--chip CHIP] [--project pio|pico-c|micropython] [--clock-hz N] [--cycles N] [--stim GPIO=WAVE ...] [--name NAME]
 
@@ -126,6 +127,31 @@ def _new(a):
     return 0
 
 
+def _clock(a):
+    from . import clock
+    if a.target is not None:
+        if a.bitrate is not None or a.cycles_per_bit is not None:
+            raise UsageError("give --target, or --bitrate with --cycles-per-bit, not both")
+        r = clock.pio_clkdiv(a.sys, a.target, chip=a.chip, max_error_ppm=a.max_error_ppm)
+        wanted = a.target
+    else:
+        if a.bitrate is None or a.cycles_per_bit is None:
+            raise UsageError("give --target HZ, or --bitrate BPS together with --cycles-per-bit N")
+        r = clock.pio_bitrate_div(a.sys, a.bitrate, a.cycles_per_bit, chip=a.chip, max_error_ppm=a.max_error_ppm)
+        wanted = a.bitrate * a.cycles_per_bit
+    print("system clock      %.10g Hz" % (a.sys if a.sys is not None else clock.DEFAULT_SYS_HZ[a.chip]))
+    print("wanted SM clock   %.10g Hz" % wanted)
+    print("CLKDIV INT        %d" % r.int_part)
+    print("CLKDIV FRAC       %d" % r.frac)
+    print("divider           %.8f" % r.divider)
+    print("SM clock          %.10g Hz" % r.sm_hz)
+    print("error             %.3f ppm" % r.error_ppm)
+    print("jitter            %d system clock cycles" % r.period_jitter_cycles)
+    for n in r.notes:
+        print("note: " + n)
+    return 0
+
+
 # What is a mistake of the user (or of the design they wrote) and not a bug of pioweave: printed as `error: ...`, exit status 2. PIOWEAVE_TRACEBACK=1 shows the traceback instead.
 VCD_MAX_CYCLES = 100_000       # the trace of a run takes about 2.8 kB per cycle (measured: 2.8 GB for 1,000,000 cycles)
 
@@ -174,6 +200,13 @@ def main(argv=None):
     em.add_argument("--tx-feed", action="append", help="CYCLE=WORD")
     em.add_argument("--no-drain", action="store_true")
     em.add_argument("--vcd", help="also write a VCD of the output pins to this file")
+    c = sub.add_parser("clock", help="the PIO clock divider (INT, FRAC and the error) for a state machine clock or a bit rate")
+    c.add_argument("--sys", type=float, default=None, help="system clock in Hz (default: the Pico SDK default of --chip)")
+    c.add_argument("--chip", default="rp2040", help="chip name; selects the default system clock (default rp2040)")
+    c.add_argument("--target", type=float, default=None, help="state machine clock in Hz")
+    c.add_argument("--bitrate", type=float, default=None, help="bit rate in bit/s (with --cycles-per-bit)")
+    c.add_argument("--cycles-per-bit", type=float, default=None, help="state machine clock cycles per bit")
+    c.add_argument("--max-error-ppm", type=float, default=None, help="fail if the error is larger than this")
     d = sub.add_parser("doctor", help="check this environment: Amaranth version, packages, optional tools, a smoke test")
     d.add_argument("--strict", action="store_true", help="a missing optional tool is a failure too")
     b = sub.add_parser("build", help="compile a design and write a project")
@@ -207,6 +240,8 @@ def _dispatch(a):
         return getattr(block_cli, a.cmd)(a)
     if a.cmd == "emulate":
         return _emulate(a)
+    if a.cmd == "clock":
+        return _clock(a)
     if a.cmd == "doctor":
         from .doctor import main as doctor
         return doctor(strict=a.strict)

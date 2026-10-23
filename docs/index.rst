@@ -14,6 +14,7 @@ Write programs for the PIO blocks of the Raspberry Pi RP2040, RP2350 and RP2354 
    blocks
    builder
    emulator
+   clock
    hardware-testing
    boards
    projects

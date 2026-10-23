@@ -73,6 +73,7 @@ Early (version 0.1.0). Everything below was checked in simulation and against th
 - The whole test suite passes on Amaranth 0.5.10 (904 tests, 1 skipped, with `PIO_COSIM_N=40` random designs of each kind; run 2026-10-17 on the merge of the pin direction support and the block layer), including real Pico SDK builds of the generated C projects; before the block layer was added its default run (367 tests, without the SDK builds) also passed on 0.5.1 and the 0.6 development version 0.6.0.dev140, and the quick suite on 0.5.1 and 0.6.0.dev140 (0.5.0 is not supported: it has no `io.SimulationPort`) (0.5.2 to 0.5.9 were last run before the autopull, IRQ and `wait pin` support was added); the pin direction and block tests have not been run on the other versions.
 - Several state machines in one design (`pioweave.block`, [docs/blocks.rst](docs/blocks.rst)): single-machine designs run as state machines 0 to 3 of one block with shared IRQ flags and pins, one program memory (at most 32 instructions in all) and one project (a `.pio` file with a program per machine, a `bitweave.toml` with one case per machine, a Pico SDK `main.c` that starts the machines together). The four example blocks and 1,000 random blocks of two to four machines agree between the Amaranth simulation of the whole block and the emulator, cycle by cycle; bitweave's simulator runs one machine per case, so the combined behaviour is checked against the emulator and the Amaranth simulation only.
 - Runnable examples are in [examples/](examples/) (blink on a board LED, UART, two state machines in one block, a WS2812-style waveform, a builder square wave, a unittest of a program in the emulator); the tests run them. `python -m pioweave new NAME` creates a project from a template.
+- Clock divider at design time (`pioweave.clock`, [docs/clock.rst](docs/clock.rst)): `pio_clkdiv(sys_hz, target_hz)` and `pio_bitrate_div(sys_hz, bit_rate, cycles_per_bit)` give INT and FRAC quantised like the chip and the emulator, with the error in ppm and the edge jitter; `python -m pioweave clock --target 4000`. The default system clocks (125 MHz RP2040, 150 MHz RP2350) are the Pico SDK defaults [verify].
 - The change log is [CHANGELOG.rst](CHANGELOG.rst); version 0.1.0 is not released yet; the licence is MIT (see [docs/releasing.rst](docs/releasing.rst)).
 - Not built yet in the Amaranth front end: `out` / `mov` to `pc` and `exec` (refused with the reason: a computed jump or an executed data word is not an FSM state; pin directions are modelled, `platform.directions`), `irq prev` / `next` and the RP2350 joins that turn the RX FIFO into registers (the Python builder has all instructions). Not built for blocks: the same program on several machines, `rel`, clock dividers that differ between machines.
 
@@ -102,6 +103,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 | [docs/blocks.rst](docs/blocks.rst) | several state machines in one block: shared IRQ flags and pins, one program memory |
 | [docs/builder.rst](docs/builder.rst) | the Python builder (`pioweave.builder`) |
 | [docs/emulator.rst](docs/emulator.rst) | the PIO emulator: what is modelled, how to use it, how it was checked |
+| [docs/clock.rst](docs/clock.rst) | the clock divider at design time: `pioweave.clock`, `python -m pioweave clock` |
 | [docs/hardware-testing.rst](docs/hardware-testing.rst) | a plan (nothing run) to check programs and the emulator on the Pico and the two RP2350B boards with the logic analysers |
 | [docs/boards.rst](docs/boards.rst) | board definitions: Pico, WeAct Studio RP2350B, Waveshare Core2350B |
 | [docs/projects.rst](docs/projects.rst) | `build()`, `SimOptions`, the project kinds, the command line, the generated C and MicroPython glue |
@@ -112,7 +114,7 @@ The package has four parts, as `amaranth` has `hdl`, `lib` and `vendor`: `piowea
 
 ## Layout
 
-    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), block, block_cli, block_designs, compile, data, designs, platform, project, scaffold, doctor, __main__ (the command line), _compat, _gate, _validate
+    pioweave/              the package (flat, as amaranth-soc and amaranth-boards): __init__ (lazy public names), block, block_cli, block_designs, compile, data, designs, platform, project, scaffold, clock, doctor, __main__ (the command line), _compat, _gate, _validate
     pioweave/builder/      the Python builder (needs no Amaranth)
     pioweave/emulator/     the PIO emulator (needs no Amaranth)
     pioweave/boards/       board definitions

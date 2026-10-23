@@ -3,6 +3,13 @@ Change log
 
 This document records changes to pioweave in the style of Amaranth's ``changes.rst``: one section per version, with the entries grouped under Added, Changed and Removed. Dates are ISO 8601. Facts about hardware are marked ``[verify]`` where they are not checked; nothing has run on a chip.
 
+Unreleased
+==========
+Added
+-----
+
+- ``pioweave.clock`` (docs/clock.rst): ``pio_clkdiv(sys_hz, target_hz, chip=, max_error_ppm=)`` and ``pio_bitrate_div(sys_hz, bit_rate, cycles_per_bit)`` give the INT and FRAC to write for a state machine clock or a bit rate, quantised like the chip and like the emulator (``round(divider * 256) / 256``, INT 0 for 65536), with the mean clock, the error in ppm, the jitter in system clock cycles and notes; ``PioError`` for a divider below 1 or above 65536 or an error above ``max_error_ppm``. ``DEFAULT_SYS_HZ`` holds the Pico SDK defaults (125 MHz RP2040, 150 MHz RP2350 family) [verify against the datasheets]. The command ``python -m pioweave clock --target HZ`` (or ``--bitrate BPS --cycles-per-bit N``) prints the table. Tested against the emulator's fractional divider (``tests/test_clock.py``). Needs no Amaranth.
+
 Version 0.1.0 (unreleased)
 ===================
 Added

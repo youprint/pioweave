@@ -15,5 +15,6 @@ docstrings are run by ``sphinx-build -b doctest``. The manuals in the other page
    designs
    block
    emulator
+   clock
    boards
    compat
